@@ -159,6 +159,14 @@ function App(){
     if(authMode==="signup" && !result.data.session) setAuthError("Account created. Check your email if confirmation is enabled, then sign in.");
   }
 
+  async function openBilling(){
+    if(!supabase || !user || !workspace){notify("Workspace billing is unavailable.");return;}
+    const fn=workspace.plan==="free"?"billing-checkout":"billing-portal";
+    const result=await supabase.functions.invoke(fn,{body:{workspaceId:workspace.id}});
+    if(result.error){notify(result.error.message);return;}
+    if(result.data?.url) window.location.href=result.data.url;
+  }
+
   async function inviteMember(){
     if(!supabase || !user || !workspace || !["owner","admin"].includes(workspace.role)) return;
     if(!inviteEmail.trim()){notify("Enter an email address.");return;}
@@ -280,7 +288,7 @@ function App(){
 
       {section==="Evaluations" && <Evaluations/>}
 
-      {section==="Settings" && <WorkspaceSettings workspace={workspace} members={members} inviteEmail={inviteEmail} setInviteEmail={setInviteEmail} inviteRole={inviteRole} setInviteRole={setInviteRole} inviteBusy={inviteBusy} inviteMember={inviteMember} createWorkspace={createWorkspace} settingsTab={settingsTab} setSettingsTab={setSettingsTab} user={user}/>}
+      {section==="Settings" && <WorkspaceSettings workspace={workspace} members={members} inviteEmail={inviteEmail} setInviteEmail={setInviteEmail} inviteRole={inviteRole} setInviteRole={setInviteRole} inviteBusy={inviteBusy} inviteMember={inviteMember} createWorkspace={createWorkspace} settingsTab={settingsTab} setSettingsTab={setSettingsTab} user={user} openBilling={openBilling}/>
 
       {selected && <InvoiceModal invoice={selected} mail={mail} setMail={setMail} close={function(){setSelected(null)}}/>}
       {match && <MatchModal invoice={match} close={function(){setMatch(null)}}/>}
@@ -289,7 +297,7 @@ function App(){
   </div>
 }
 
-function WorkspaceSettings(p:{workspace:Workspace|null;members:Array<{user_id:string;role:string;created_at:string}>;inviteEmail:string;setInviteEmail:(v:string)=>void;inviteRole:string;setInviteRole:(v:string)=>void;inviteBusy:boolean;inviteMember:()=>void;createWorkspace:()=>void;settingsTab:string;setSettingsTab:(v:string)=>void;user:import("@supabase/supabase-js").User|null}){
+function WorkspaceSettings(p:{workspace:Workspace|null;members:Array<{user_id:string;role:string;created_at:string}>;inviteEmail:string;setInviteEmail:(v:string)=>void;inviteRole:string;setInviteRole:(v:string)=>void;inviteBusy:boolean;inviteMember:()=>void;createWorkspace:()=>void;settingsTab:string;setSettingsTab:(v:string)=>void;user:import("@supabase/supabase-js").User|null;openBilling:()=>void}){
   const isAdmin=p.workspace && ["owner","admin"].includes(p.workspace.role);
   const plan=p.workspace?.plan || "free";
   return <Section title="Workspace settings" eyebrow="SaaS workspace" action={<button className="secondary" onClick={p.createWorkspace}><Plus size={15}/> New workspace</button>}>
@@ -299,7 +307,7 @@ function WorkspaceSettings(p:{workspace:Workspace|null;members:Array<{user_id:st
       <div className="card"><div className="cardHead"><div><span className="eyebrow">Plan</span><h2>{plan==="free"?"Free":"Pro"}</h2></div><CreditCard size={18}/></div><p className="muted">{plan==="free"?"Good for trying FinPilot with a small finance workspace.":"Your workspace has access to expanded finance operations."}</p><div className="planFeatures"><span>✓ Unlimited invoice records</span><span>✓ Agent workflow history</span><span>✓ Policy knowledge base</span><span>✓ Private document storage</span></div><button className="primary" onClick={function(){p.setSettingsTab("Billing")}}>{plan==="free"?"Upgrade workspace":"Manage subscription"}</button></div>
     </div>}
     {p.settingsTab==="Team" && <div className="card"><div className="cardHead"><div><span className="eyebrow">Team members</span><h2>{p.members.length} members</h2></div><Users size={18}/></div>{isAdmin && <div className="inviteBar"><input value={p.inviteEmail} onChange={function(e){p.setInviteEmail(e.target.value)}} placeholder="teammate@company.com"/><select value={p.inviteRole} onChange={function(e){p.setInviteRole(e.target.value)}}><option value="member">Member</option><option value="admin">Admin</option><option value="viewer">Viewer</option></select><button className="primary" onClick={p.inviteMember} disabled={p.inviteBusy}>{p.inviteBusy?"Inviting…":"Invite"}</button></div>}{p.members.map(function(m){return <div className="memberRow" key={m.user_id}><div className="memberAvatar">{m.user_id.slice(0,2).toUpperCase()}</div><div><b>{m.user_id===p.user?.id?"You":m.user_id.slice(0,8)+"…"}</b><span>Joined {new Date(m.created_at).toLocaleDateString()}</span></div><span className="tag">{m.role}</span></div>})}</div>}
-    {p.settingsTab==="Billing" && <div className="billingGrid"><div className="card"><span className="eyebrow">Current plan</span><h2>{plan.toUpperCase()}</h2><div className="price">{plan==="free"?"₹0":"Custom"}</div><p className="muted">Billing is workspace-level, so your team shares one subscription and one usage pool.</p><button className="primary" onClick={function(){window.alert("Stripe billing is ready to connect. Add Stripe price IDs and the billing Edge Function secrets to enable checkout.")}}><CreditCard size={16}/> {plan==="free"?"Upgrade to Pro":"Open billing portal"}</button></div><div className="card"><span className="eyebrow">SaaS billing architecture</span><h2>Stripe-ready</h2><p className="muted">Subscriptions, customer IDs, plan status and billing period are stored against this workspace. Stripe checkout can be enabled without changing the product UI.</p><div className="billingSteps"><span>1 · Workspace created</span><span>2 · Subscription attached</span><span>3 · Usage tracked</span><span>4 · Checkout / portal</span></div></div></div>}
+    {p.settingsTab==="Billing" && <div className="billingGrid"><div className="card"><span className="eyebrow">Current plan</span><h2>{plan.toUpperCase()}</h2><div className="price">{plan==="free"?"₹0":"Custom"}</div><p className="muted">Billing is workspace-level, so your team shares one subscription and one usage pool.</p><button className="primary" onClick={p.openBilling}><CreditCard size={16}/> {plan==="free"?"Upgrade to Pro":"Open billing portal"}</button></div><div className="card"><span className="eyebrow">SaaS billing architecture</span><h2>Stripe-ready</h2><p className="muted">Subscriptions, customer IDs, plan status and billing period are stored against this workspace. Stripe checkout can be enabled without changing the product UI.</p><div className="billingSteps"><span>1 · Workspace created</span><span>2 · Subscription attached</span><span>3 · Usage tracked</span><span>4 · Checkout / portal</span></div></div></div>}
     {p.settingsTab==="Usage" && <div className="usageGrid"><UsageCard label="Invoices" used={12} limit={100}/><UsageCard label="AI agent runs" used={7} limit={25}/><UsageCard label="Documents" used={4} limit={25}/><UsageCard label="Team members" used={p.members.length} limit={5}/></div>}
   </Section>
 }
