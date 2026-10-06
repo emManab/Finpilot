@@ -1,10 +1,50 @@
-# FinPilot
+# FinPilot — Agentic AI Finance Employee
 
-Agentic AI finance workspace demo built with React + TypeScript.
+FinPilot is a recruiter-ready React + TypeScript finance operations product designed around the ML/LLM workflow expected in modern agentic finance systems.
 
-Run locally:
+## What works in the live demo
+
+- Interactive dashboard with finance KPIs
+- Search and filter invoices
+- Invoice investigation modal
+- Deterministic multi-agent workflow with live trace states
+- Research / Finance / Document / Verification / Editor agent views
+- Invoice → PO → goods-received three-way matching
+- Drag-and-drop document indexing demo
+- Finance-policy knowledge search with source citations
+- Verification evidence and risk classification
+- AI-style follow-up email drafting
+- Prompt evaluation dashboard
+- Seeded demo data so reviewers need no account or API key
+- Responsive layout
+- Production build check through GitHub Actions
+
+## Run locally
 
 ```bash
 npm install
 npm run dev
 ```
+
+Production build:
+
+```bash
+npm run build
+```
+
+## Deploy
+
+This is a Vite React app and can be imported directly into Vercel. Vercel supports Vite deployments and Git-connected deployments can automatically rebuild after pushes.
+
+- Framework: Vite
+- Build command: `npm run build`
+- Output directory: `dist`
+- No environment variables are required for demo mode.
+
+## Architecture
+
+The current public demo intentionally uses a deterministic browser-side service layer so a recruiter can test every workflow without an API key. The UI contracts are structured so the deterministic services can later be replaced with FastAPI + PostgreSQL/pgvector + OCR + Gemini/OpenAI/Anthropic.
+
+## Important
+
+The percentages shown in the Evaluation Lab are **demo benchmark values**, not claims about a production model. The product labels itself as Demo Mode to make that distinction explicit.
