@@ -33,6 +33,44 @@ const defaultPolicies = [
 ];
 
 const money = (n:number) => new Intl.NumberFormat("en-IN",{style:"currency",currency:"INR",maximumFractionDigits:0}).format(n);
+const APPROVAL_THRESHOLD = 500000;
+
+type RiskSignal = { label:string; detail:string; source:string };
+type RiskAnalysis = { signals:RiskSignal[]; level:Risk; recommendation:string };
+
+function computeRiskAnalysis(inv:Invoice):RiskAnalysis {
+  const signals:RiskSignal[] = [];
+  const poMismatch = inv.amount - inv.po;
+  if(poMismatch !== 0){
+    signals.push({ label:"PO mismatch", detail:"Invoice "+money(inv.amount)+" vs PO "+money(inv.po)+" — "+money(Math.abs(poMismatch))+" discrepancy", source:"Vendor Payment SOP §4.4" });
+  }
+  const receivedMismatch = inv.amount - inv.received;
+  if(receivedMismatch !== 0 && inv.received !== inv.po){
+    signals.push({ label:"Goods receipt mismatch", detail:"Goods received "+money(inv.received)+" vs Invoice "+money(inv.amount), source:"Vendor Payment SOP §4.4" });
+  }
+  if(inv.amount > APPROVAL_THRESHOLD){
+    signals.push({ label:"Above approval threshold", detail:"Invoice "+money(inv.amount)+" exceeds "+money(APPROVAL_THRESHOLD)+" limit", source:"Invoice Approval Matrix §2.1" });
+  }
+  if(inv.status === "Overdue"){
+    const dueDate = new Date(inv.due);
+    const today = new Date();
+    const daysOverdue = Math.round((today.getTime() - dueDate.getTime()) / (1000*60*60*24));
+    signals.push({ label:"Invoice overdue", detail:daysOverdue+" days past due date ("+inv.due+")", source:"Collections Policy §3.2" });
+  }
+  let level:Risk = "Low";
+  if(signals.length >= 2) level = "High";
+  else if(signals.length === 1) level = "Medium";
+  let recommendation = "No action required — proceed with standard approval.";
+  if(level === "High"){
+    const hasPOMismatch = signals.some(function(s){return s.label==="PO mismatch"});
+    recommendation = hasPOMismatch
+      ? "Hold approval and request PO reconciliation before payment."
+      : "Escalate to finance lead for review before approval.";
+  } else if(level === "Medium"){
+    recommendation = "Flag for review — verify details before proceeding.";
+  }
+  return { signals, level, recommendation };
+}
 
 function App(){
   const [section,setSection] = useState("Dashboard");
@@ -230,11 +268,80 @@ function Documents(props:{files:string[];upload:(f:File)=>void;invoices:Invoice[
 function MatchModal(props:{invoice:Invoice;close:()=>void}){const i=props.invoice;const pass=i.amount===i.po&&i.amount===i.received;return <div className="modalWrap" onClick={props.close}><div className="modal" onClick={function(e){e.stopPropagation()}}><button className="close" onClick={props.close}><X size={18}/></button><span className="eyebrow">Three-way match</span><h2>{i.id}</h2><p className="muted">{i.customer}</p><div className="matchGrid"><MatchCell label="Invoice" value={money(i.amount)} ok={i.amount===i.po}/><MatchCell label="Purchase order" value={money(i.po)} ok={i.amount===i.po}/><MatchCell label="Goods received" value={money(i.received)} ok={i.amount===i.received}/></div><div className={pass?"verifyBox":"warningBox"}>{pass?<CheckCircle2 size={20}/>:<ShieldCheck size={20}/>}<div><b>{pass?"Match passed":"Mismatch detected"}</b><p>{pass?"Invoice, PO and receipt values agree. Payment can proceed to approval.":"Invoice "+money(i.amount)+" differs from a source record. Review the discrepancy before approval."}</p></div></div></div></div>}
 function MatchCell(p:{label:string;value:string;ok:boolean}){return <div><span>{p.label}</span><b>{p.value}</b><small className={p.ok?"ok":"bad"}>{p.ok?"MATCH":"MISMATCH"}</small></div>}
 function InvoiceRow(p:{invoice:Invoice;onClick:()=>void}){const i=p.invoice;return <div className="row" onClick={p.onClick}><div><b>{i.id}</b><span>{i.customer}</span></div><div><b>{money(i.amount)}</b><span className={"status "+i.status.toLowerCase()}>{i.status}</span></div><span className={"risk "+i.risk.toLowerCase()}>{i.risk} risk</span><ArrowUpRight size={16}/></div>}
-function InvoiceModal(p:{invoice:Invoice;mail:boolean;setMail:(v:boolean)=>void;close:()=>void}){const i=p.invoice;return <div className="modalWrap" onClick={p.close}><div className="modal" onClick={function(e){e.stopPropagation()}}><button className="close" onClick={p.close}><X size={18}/></button><span className="eyebrow">Invoice investigation</span><h2>{i.id}</h2><p className="muted">{i.customer} · {money(i.amount)}</p><div className="detailGrid"><div><span>Risk</span><b className={"risk "+i.risk.toLowerCase()}>{i.risk}</b></div><div><span>Due date</span><b>{i.due}</b></div><div><span>Status</span><b>{i.status}</b></div><div><span>Evidence</span><b>18 claims checked</b></div></div><div className="verifyBox"><ShieldCheck size={20}/><div><b>Verification passed</b><p>Amount, due date, customer and payment history match source records.</p></div></div><button className="primary full" onClick={function(){p.setMail(true)}}><Mail size={17}/>Draft follow-up email</button>{p.mail&&<div className="email"><div className="emailHead"><b>Draft email</b><span>AI generated · editable</span></div><p>Subject: Follow-up on {i.id}</p><p>Hi {i.customer} team,<br/><br/>Our records show {i.id} for {money(i.amount)} is currently overdue. Could you share an update on the expected payment date?<br/><br/>Thanks,<br/>Finance Operations</p></div>}</div></div>}
+function InvoiceModal(p:{invoice:Invoice;mail:boolean;setMail:(v:boolean)=>void;close:()=>void}){
+  const i=p.invoice;
+  const analysis = computeRiskAnalysis(i);
+  const threeWayPass = i.amount===i.po && i.amount===i.received;
+  return <div className="modalWrap" onClick={p.close}><div className="modal modalWide" onClick={function(e){e.stopPropagation()}}>
+    <button className="close" onClick={p.close}><X size={18}/></button>
+    <span className="eyebrow">Invoice investigation</span>
+    <h2>{i.id}</h2>
+    <p className="muted">{i.customer} · {money(i.amount)}</p>
+
+    <div className="detailGrid">
+      <div><span>Computed risk</span><b className={"risk "+analysis.level.toLowerCase()}>{analysis.level}</b></div>
+      <div><span>Due date</span><b>{i.due}</b></div>
+      <div><span>Status</span><b>{i.status}</b></div>
+      <div><span>Signals</span><b>{analysis.signals.length} detected</b></div>
+    </div>
+
+    {/* Three-way match summary */}
+    <div className="matchGrid">
+      <MatchCell label="Invoice" value={money(i.amount)} ok={i.amount===i.po}/>
+      <MatchCell label="Purchase order" value={money(i.po)} ok={i.amount===i.po}/>
+      <MatchCell label="Goods received" value={money(i.received)} ok={i.amount===i.received}/>
+    </div>
+
+    {/* Risk signals */}
+    {analysis.signals.length > 0 && <div className="riskSignals">
+      <div className="riskSignalsHead"><ShieldCheck size={16}/><b>Risk signals</b></div>
+      {analysis.signals.map(function(sig){return <div className="riskSignal" key={sig.label}>
+        <div className="signalDot"/>
+        <div><b>{sig.label}</b><span>{sig.detail}</span><small>Source · {sig.source}</small></div>
+      </div>})}
+    </div>}
+
+    {/* Recommendation */}
+    <div className={analysis.level==="High"?"warningBox":analysis.level==="Medium"?"warningBox":"verifyBox"}>
+      {analysis.level==="Low"?<CheckCircle2 size={20}/>:<ShieldCheck size={20}/>}
+      <div>
+        <b>Recommendation</b>
+        <p>{analysis.recommendation}</p>
+      </div>
+    </div>
+
+    {/* Sources */}
+    {analysis.signals.length > 0 && <div className="sourceList">
+      <small className="eyebrow">Sources</small>
+      {analysis.signals.map(function(sig){return <div className="sourceItem" key={sig.source}><FileText size={14}/><span>{sig.source}</span></div>})}
+      <div className="sourceItem"><FileText size={14}/><span>Invoice {i.id}</span></div>
+    </div>}
+
+    <button className="primary full" onClick={function(){p.setMail(true)}}><Mail size={17}/>Draft follow-up email</button>
+    {p.mail&&<div className="email"><div className="emailHead"><b>Draft email</b><span>AI generated · editable</span></div><p>Subject: Follow-up on {i.id}</p><p>Hi {i.customer} team,<br/><br/>Our records show {i.id} for {money(i.amount)} is currently {i.status.toLowerCase()}. {analysis.level!=="Low"?"We have identified "+analysis.signals.length+" risk signal"+(analysis.signals.length>1?"s":"")+" that require attention. ":""}Could you share an update on the expected payment date?<br/><br/>Thanks,<br/>Finance Operations</p></div>}
+  </div></div>}
+
 function Evaluations(){return <Section title="Evaluation lab" eyebrow="Prompt QA"><div className="evalgrid"><Eval label="Factual accuracy" value="94.2%" delta="+12.4 pts"/><Eval label="Hallucination rate" value="3.1%" delta="-7.9 pts"/><Eval label="Tool success" value="95.4%" delta="+9.8 pts"/><Eval label="Avg latency" value="3.1s" delta="-22%"/></div><div className="card"><div className="cardHead"><div><span className="eyebrow">Prompt benchmark</span><h2>Version comparison</h2></div></div><div className="bench"><div><span>Finance Agent v1</span><strong>82.0%</strong></div><div><span>Finance Agent v2</span><strong>94.2%</strong></div><div><span>Verification v1</span><strong>91.6%</strong></div></div><div className="benchmarkNote"><CheckCircle2 size={16}/> 100 seeded finance questions · deterministic demo metrics</div></div></Section>}
 function Stat(p:{label:string;value:string;change:string}){return <div className="stat"><span>{p.label}</span><b>{p.value}</b><em>{p.change}</em></div>}
 function Eval(p:{label:string;value:string;delta:string}){return <div className="eval"><span>{p.label}</span><b>{p.value}</b><em>{p.delta}</em></div>}
 function Section(p:{title:string;eyebrow:string;children:React.ReactNode;action?:React.ReactNode}){return <section className="page"><div className="pageHead"><div><span className="eyebrow">{p.eyebrow}</span><h1>{p.title}</h1></div>{p.action}</div>{p.children}</section>}
 function Empty(p:{title:string;text:string}){return <div className="empty"><FileText size={20}/><b>{p.title}</b><span>{p.text}</span></div>}
+
+function AuthScreen(p:{mode:"signin"|"signup";setMode:(m:"signin"|"signup")=>void;email:string;setEmail:(v:string)=>void;password:string;setPassword:(v:string)=>void;busy:boolean;error:string;submit:()=>void}){
+  return <div className="authShell"><div className="authCard">
+    <div className="authBrand"><div className="brandmark" style={{display:"inline-grid"}}><Sparkles size={18}/></div></div>
+    <h1>{p.mode==="signin"?"Sign in":"Create account"}</h1>
+    <p className="authIntro">{p.mode==="signin"?"Sign in to your FinPilot workspace.":"Create a new account to get started with FinPilot."}</p>
+    <label>Email<input type="email" value={p.email} onChange={function(e){p.setEmail(e.target.value)}} placeholder="you@company.com"/></label>
+    <label>Password<input type="password" value={p.password} onChange={function(e){p.setPassword(e.target.value)}} placeholder="••••••••" onKeyDown={function(e){if(e.key==="Enter")p.submit()}}/></label>
+    {p.error && <div className="authError">{p.error}</div>}
+    <button className="primary full" onClick={p.submit} disabled={p.busy} style={{marginTop:16}}>
+      {p.busy?"Please wait…":p.mode==="signin"?<><LogIn size={15}/>Sign in</>:<><UserPlus size={15}/>Sign up</>}
+    </button>
+    <button className="authSwitch" onClick={function(){p.setMode(p.mode==="signin"?"signup":"signin")}}>
+      {p.mode==="signin"?"Don't have an account? Sign up":"Already have an account? Sign in"}
+    </button>
+  </div></div>
+}
 
 createRoot(document.getElementById("root")!).render(<App/>);

@@ -17,6 +17,8 @@
     "@supabase/supabase-js": "^2.45.4"
   },
   "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "typescript": "5.9.2"
   }
 }
