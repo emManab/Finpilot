@@ -68,3 +68,30 @@ The publishable key is safe for browser use; never put a Supabase `service_role`
 ### Optional AI activation
 
 The repo includes a Supabase Edge Function at `supabase/functions/agent/index.ts`. Without an OpenAI secret, the assistant uses a deterministic grounded fallback. To enable natural-language reasoning, deploy the function with the Supabase CLI and set `OPENAI_API_KEY` as a server-side secret; never put that key in the frontend.
+
+
+## SaaS architecture
+
+FinPilot now includes a multi-tenant SaaS foundation:
+
+- Workspaces / organizations
+- Owner, admin, member and viewer roles
+- Workspace-scoped data access with RLS
+- Team invitations
+- Workspace-level plans and subscriptions
+- Usage events and audit logs
+- Billing-ready Stripe Checkout and Billing Portal Edge Functions
+- Stripe webhook subscription synchronization
+- Workspace settings, team, billing and usage screens
+
+### Stripe configuration
+
+The billing UI works as a normal workspace settings surface without Stripe credentials. To activate paid subscriptions, deploy the billing Edge Functions and configure these Supabase server-side secrets:
+
+- STRIPE_SECRET_KEY
+- STRIPE_PRO_PRICE_ID
+- STRIPE_WEBHOOK_SECRET
+- SUPABASE_SERVICE_ROLE_KEY
+- APP_URL
+
+Never place these secrets in VITE_* variables or browser code.
