@@ -1,14 +1,27 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Activity, ArrowUpRight, Bot, Check, CheckCircle2, CircleDollarSign, ClipboardCheck, CreditCard, FileText, LayoutDashboard, LogIn, LogOut, Mail, Menu, Plus, Search, Settings, ShieldCheck, Sparkles, UploadCloud, UserPlus, Users, X, Zap } from "lucide-react";
+import {
+  Activity, ArrowDownRight, ArrowUpRight, Bell, Bot, Check, CheckCircle2,
+  ChevronDown, CircleDollarSign, ClipboardCheck, CreditCard, FileText,
+  LayoutDashboard, LogIn, LogOut, Menu, Plus, Search, Settings, ShieldCheck,
+  Sparkles, UploadCloud, UserPlus, Users, Wallet, X, Zap
+} from "lucide-react";
 import { supabase } from "./lib/supabase";
 import "./styles.css";
 
 type Status = "Paid" | "Overdue" | "Pending";
 type Risk = "Low" | "Medium" | "High";
-type Invoice = { id:string; customer:string; amount:number; due:string; status:Status; risk:Risk; po:number; received:number };
-type Trace = { name:string; detail:string; state:"queued"|"running"|"done"; ms?:number };
-type Workspace = { id:string; name:string; slug:string; plan:"free"|"pro"|"business"; role:"owner"|"admin"|"member"|"viewer" };
+type Invoice = {
+  id:string; customer:string; amount:number; due:string; status:Status; risk:Risk;
+  po:number; received:number;
+};
+type Trace = {name:string; detail:string; state:"queued"|"running"|"done"; ms?:number};
+type Workspace = {
+  id:string; name:string; slug:string;
+  plan:"free"|"pro"|"business";
+  role:"owner"|"admin"|"member"|"viewer";
+};
+type Page = "Overview"|"Invoices"|"Workflows"|"Documents"|"Knowledge"|"Team & billing";
 
 const seed:Invoice[] = [
   {id:"INV-1042",customer:"Acme Corp",amount:480000,due:"2026-09-15",status:"Overdue",risk:"High",po:480000,received:480000},
@@ -18,395 +31,341 @@ const seed:Invoice[] = [
   {id:"INV-1049",customer:"Brightline AI",amount:126000,due:"2026-09-20",status:"Paid",risk:"Low",po:126000,received:126000}
 ];
 
-const agentDefs = [
-  ["Planner","Routes the request to specialist agents"],
-  ["Research Agent","Retrieves invoices, customers and source records"],
-  ["Finance Agent","Calculates aging, exposure and risk"],
-  ["Document Agent","Extracts invoice and PO fields"],
-  ["Verification Agent","Checks claims against source evidence"],
-  ["Editor Agent","Produces the final report and action"]
+const agents = [
+  ["Planner","Routes each finance request to the right tools."],
+  ["Research","Retrieves invoices, vendors and source records."],
+  ["Finance","Calculates exposure, aging and risk."],
+  ["Document","Extracts and compares financial documents."],
+  ["Verification","Checks every claim against evidence."],
+  ["Editor","Turns verified findings into an action."]
 ] as const;
 
-const defaultPolicies = [
+const policies = [
   ["Collections Policy","Invoices become eligible for escalation after 14 days overdue.","§3.2"],
   ["Invoice Approval Matrix","Invoices above ₹5L require finance lead approval.","§2.1"],
   ["Vendor Payment SOP","Three-way matching must pass before payment approval.","§4.4"]
 ];
 
-const money = (n:number) => new Intl.NumberFormat("en-IN",{style:"currency",currency:"INR",maximumFractionDigits:0}).format(n);
-const APPROVAL_THRESHOLD = 500000;
+const money=(n:number)=>new Intl.NumberFormat("en-IN",{style:"currency",currency:"INR",maximumFractionDigits:0}).format(n);
+const moneyShort=(n:number)=>n>=10000000?"₹"+(n/10000000).toFixed(1)+"Cr":n>=100000?"₹"+(n/100000).toFixed(1)+"L":"₹"+Math.round(n/1000)+"K";
 
-type RiskSignal = { label:string; detail:string; source:string };
-type RiskAnalysis = { signals:RiskSignal[]; level:Risk; recommendation:string };
-
-function computeRiskAnalysis(inv:Invoice):RiskAnalysis {
-  const signals:RiskSignal[] = [];
-  const poMismatch = inv.amount - inv.po;
-  if(poMismatch !== 0){
-    signals.push({ label:"PO mismatch", detail:"Invoice "+money(inv.amount)+" vs PO "+money(inv.po)+" — "+money(Math.abs(poMismatch))+" discrepancy", source:"Vendor Payment SOP §4.4" });
-  }
-  const receivedMismatch = inv.amount - inv.received;
-  if(receivedMismatch !== 0 && inv.received !== inv.po){
-    signals.push({ label:"Goods receipt mismatch", detail:"Goods received "+money(inv.received)+" vs Invoice "+money(inv.amount), source:"Vendor Payment SOP §4.4" });
-  }
-  if(inv.amount > APPROVAL_THRESHOLD){
-    signals.push({ label:"Above approval threshold", detail:"Invoice "+money(inv.amount)+" exceeds "+money(APPROVAL_THRESHOLD)+" limit", source:"Invoice Approval Matrix §2.1" });
-  }
-  if(inv.status === "Overdue"){
-    const dueDate = new Date(inv.due);
-    const today = new Date();
-    const daysOverdue = Math.round((today.getTime() - dueDate.getTime()) / (1000*60*60*24));
-    signals.push({ label:"Invoice overdue", detail:daysOverdue+" days past due date ("+inv.due+")", source:"Collections Policy §3.2" });
-  }
-  let level:Risk = "Low";
-  if(signals.length >= 2) level = "High";
-  else if(signals.length === 1) level = "Medium";
-  let recommendation = "No action required — proceed with standard approval.";
-  if(level === "High"){
-    const hasPOMismatch = signals.some(function(s){return s.label==="PO mismatch"});
-    recommendation = hasPOMismatch
-      ? "Hold approval and request PO reconciliation before payment."
-      : "Escalate to finance lead for review before approval.";
-  } else if(level === "Medium"){
-    recommendation = "Flag for review — verify details before proceeding.";
-  }
-  return { signals, level, recommendation };
+function riskFor(i:Invoice):{level:Risk;reasons:string[];recommendation:string}{
+  const reasons:string[]=[];
+  if(i.amount!==i.po) reasons.push("Invoice is "+money(Math.abs(i.amount-i.po))+" different from the purchase order.");
+  if(i.amount!==i.received) reasons.push("Goods received do not fully reconcile with the invoice.");
+  if(i.amount>500000) reasons.push("Amount is above the ₹5L finance approval threshold.");
+  if(i.status==="Overdue") reasons.push("Invoice is overdue and requires collections review.");
+  const level:Risk=reasons.length>=2?"High":reasons.length===1?"Medium":"Low";
+  const recommendation=level==="High"?"Hold approval and request reconciliation before payment.":level==="Medium"?"Flag for finance review before proceeding.":"No exception found — proceed through standard approval.";
+  return {level,reasons,recommendation};
 }
 
 function App(){
-  const [section,setSection] = useState("Dashboard");
-  const [user,setUser] = useState<import("@supabase/supabase-js").User|null>(null);
-  const [authMode,setAuthMode] = useState<"signin"|"signup">("signin");
-  const [authEmail,setAuthEmail] = useState("");
-  const [authPassword,setAuthPassword] = useState("");
-  const [authBusy,setAuthBusy] = useState(false);
-  const [authError,setAuthError] = useState("");
-  const [policyData,setPolicyData] = useState(defaultPolicies);
-  const [cloudReady,setCloudReady] = useState(false);
-  const [workspace,setWorkspace] = useState<Workspace|null>(null);
-  const [members,setMembers] = useState<Array<{user_id:string;role:string;created_at:string}>>([]);
-  const [inviteEmail,setInviteEmail] = useState("");
-  const [inviteRole,setInviteRole] = useState("member");
-  const [inviteBusy,setInviteBusy] = useState(false);
-  const [settingsTab,setSettingsTab] = useState("Workspace");
-  const [assistantQuestion,setAssistantQuestion] = useState("Why is INV-1042 high risk?");
-  const [assistantAnswer,setAssistantAnswer] = useState("INV-1042 is high risk because it is overdue and has ₹4.8L outstanding. The Collections Policy allows escalation after 14 days overdue.");
-  const [assistantBusy,setAssistantBusy] = useState(false);
-  const [invoices,setInvoices] = useState<Invoice[]>(seed);
-  const [query,setQuery] = useState("");
-  const [selected,setSelected] = useState<Invoice|null>(null);
-  const [running,setRunning] = useState(false);
-  const [trace,setTrace] = useState<Trace[]>(agentDefs.map(function(a){return {name:a[0],detail:a[1],state:"queued" as const}}));
-  const [toast,setToast] = useState("");
-  const [mail,setMail] = useState(false);
-  const [policyQuery,setPolicyQuery] = useState("");
-  const [files,setFiles] = useState<string[]>([]);
-  const [match,setMatch] = useState<Invoice|null>(null);
+  const [page,setPage]=useState<Page>("Overview");
+  const [user,setUser]=useState<import("@supabase/supabase-js").User|null>(null);
+  const [workspace,setWorkspace]=useState<Workspace|null>(null);
+  const [invoices,setInvoices]=useState<Invoice[]>(seed);
+  const [files,setFiles]=useState<string[]>([]);
+  const [policyData,setPolicyData]=useState(policies);
+  const [query,setQuery]=useState("");
+  const [selected,setSelected]=useState<Invoice|null>(null);
+  const [showNew,setShowNew]=useState(false);
+  const [running,setRunning]=useState(false);
+  const [trace,setTrace]=useState<Trace[]>(agents.map(a=>({name:a[0],detail:a[1],state:"queued" as const})));
+  const [toast,setToast]=useState("");
+  const [authMode,setAuthMode]=useState<"signin"|"signup">("signin");
+  const [email,setEmail]=useState("");
+  const [password,setPassword]=useState("");
+  const [authError,setAuthError]=useState("");
+  const [authBusy,setAuthBusy]=useState(false);
+  const [assistant,setAssistant]=useState("Why is INV-1038 high risk?");
+  const [answer,setAnswer]=useState("INV-1038 is high risk because the invoice is ₹20,000 above its PO and it is overdue. The Invoice Approval Matrix also requires finance lead approval above ₹5L.");
+  const [assistantBusy,setAssistantBusy]=useState(false);
+  const [sidebarOpen,setSidebarOpen]=useState(false);
 
-  useEffect(function(){
-    if(!supabase) return;
-    let mounted = true;
-    supabase.auth.getSession().then(function(result){
-      if(mounted) setUser(result.data.session?.user ?? null);
-    });
-    const listener = supabase.auth.onAuthStateChange(function(_event,session){
-      setUser(session?.user ?? null);
-    });
-    return function(){ mounted=false; listener.data.subscription.unsubscribe(); };
+  const notify=(s:string)=>{setToast(s);window.setTimeout(()=>setToast(""),2800)};
+
+  useEffect(()=>{
+    if(!supabase)return;
+    let active=true;
+    supabase.auth.getSession().then(({data})=>{if(active)setUser(data.session?.user??null)});
+    const {data}=supabase.auth.onAuthStateChange((_event,session)=>setUser(session?.user??null));
+    return ()=>{active=false;data.subscription.unsubscribe()};
   },[]);
 
-  useEffect(function(){
-    if(!supabase || !user) return;
-    async function loadCloud(){
-      setCloudReady(false);
-      const workspaceResult = await supabase!.rpc("get_or_create_workspace");
-      if(workspaceResult.error || !workspaceResult.data?.[0]){
-        console.error("Workspace load:",workspaceResult.error?.message);
-        setCloudReady(true);
-        return;
-      }
-      const ws = workspaceResult.data[0] as Workspace;
-      setWorkspace(ws);
-      const seedResult = await supabase!.rpc("seed_finpilot_workspace");
-      if(seedResult.error) console.warn("FinPilot seed:",seedResult.error.message);
-      const invoiceResult = await supabase!.from("invoices").select("invoice_number,customer,amount,due,status,risk,po_amount,received_amount").order("created_at",{ascending:false});
-      if(!invoiceResult.error && invoiceResult.data?.length){
-        setInvoices(invoiceResult.data.map(function(row){
-          return {id:row.invoice_number,customer:row.customer,amount:Number(row.amount),due:row.due,status:row.status,risk:row.risk,po:Number(row.po_amount),received:Number(row.received_amount)} as Invoice;
-        }));
-      }
-      const policyResult = await supabase!.from("policies").select("title,body,citation").order("created_at",{ascending:true});
-      if(!policyResult.error && policyResult.data?.length){
-        setPolicyData(policyResult.data.map(function(row){ return [row.title,row.body,row.citation] as [string,string,string]; }));
-      }
-      const documentResult = await supabase!.from("documents").select("file_name").order("created_at",{ascending:false});
-      if(!documentResult.error) setFiles((documentResult.data ?? []).map(function(row){return row.file_name;}));
-      const membersResult = await supabase!.from("workspace_members").select("user_id,role,created_at").eq("workspace_id",ws.id).order("created_at",{ascending:true});
-      if(!membersResult.error) setMembers(membersResult.data ?? []);
-      setCloudReady(true);
-    }
-    loadCloud();
+  useEffect(()=>{
+    if(!supabase||!user)return;
+    (async()=>{
+      const ws=await supabase.rpc("get_or_create_workspace");
+      if(ws.data?.[0])setWorkspace(ws.data[0] as Workspace);
+      await supabase.rpc("seed_finpilot_workspace");
+      const inv=await supabase.from("invoices").select("invoice_number,customer,amount,due,status,risk,po_amount,received_amount").order("created_at",{ascending:false});
+      if(!inv.error&&inv.data?.length)setInvoices(inv.data.map(r=>({id:r.invoice_number,customer:r.customer,amount:Number(r.amount),due:r.due,status:r.status,risk:r.risk,po:Number(r.po_amount),received:Number(r.received_amount)})));
+      const pol=await supabase.from("policies").select("title,body,citation").order("created_at");
+      if(!pol.error&&pol.data?.length)setPolicyData(pol.data.map(r=>[r.title,r.body,r.citation]));
+      const docs=await supabase.from("documents").select("file_name").order("created_at",{ascending:false});
+      if(!docs.error)setFiles((docs.data??[]).map(r=>r.file_name));
+    })();
   },[user?.id]);
 
-  async function authenticate(){
-    if(!supabase){ setAuthError("Supabase is not configured. Add VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY."); return; }
-    if(!authEmail || authPassword.length < 6){ setAuthError("Enter a valid email and a password with at least 6 characters."); return; }
-    setAuthBusy(true); setAuthError("");
-    const result = authMode==="signin"
-      ? await supabase.auth.signInWithPassword({email:authEmail,password:authPassword})
-      : await supabase.auth.signUp({email:authEmail,password:authPassword});
+  async function auth(){
+    if(!supabase){setAuthError("Supabase is not configured.");return}
+    if(!email||password.length<6){setAuthError("Enter a valid email and a password with at least 6 characters.");return}
+    setAuthBusy(true);setAuthError("");
+    const r=authMode==="signin"
+      ? await supabase.auth.signInWithPassword({email,password})
+      : await supabase.auth.signUp({email,password});
     setAuthBusy(false);
-    if(result.error){ setAuthError(result.error.message); return; }
-    if(authMode==="signup" && !result.data.session) setAuthError("Account created. Check your email if confirmation is enabled, then sign in.");
+    if(r.error)setAuthError(r.error.message);
+    else if(authMode==="signup"&&!r.data.session)setAuthError("Account created. Check your email if confirmation is enabled.");
   }
 
-  async function openBilling(){
-    if(!supabase || !user || !workspace){notify("Workspace billing is unavailable.");return;}
-    const fn=workspace.plan==="free"?"billing-checkout":"billing-portal";
-    const result=await supabase.functions.invoke(fn,{body:{workspaceId:workspace.id}});
-    if(result.error){notify(result.error.message);return;}
-    if(result.data?.url) window.location.href=result.data.url;
-  }
+  async function signOut(){await supabase?.auth.signOut();setUser(null);setWorkspace(null);setInvoices(seed);}
 
-  async function inviteMember(){
-    if(!supabase || !user || !workspace || !["owner","admin"].includes(workspace.role)) return;
-    if(!inviteEmail.trim()){notify("Enter an email address.");return;}
-    setInviteBusy(true);
-    const result=await supabase.from("workspace_invites").insert({workspace_id:workspace.id,email:inviteEmail.trim().toLowerCase(),role:inviteRole,invited_by:user.id});
-    setInviteBusy(false);
-    if(result.error){notify(result.error.message);return;}
-    await supabase.from("audit_logs").insert({workspace_id:workspace.id,user_id:user.id,action:"member.invited",entity_type:"workspace_invite",metadata:{email:inviteEmail.trim().toLowerCase(),role:inviteRole}});
-    setInviteEmail("");
-    notify("Invitation created for "+inviteEmail.trim());
-  }
-
-  async function createWorkspace(){
-    if(!supabase || !user) return;
-    const name=window.prompt("Workspace name");
-    if(!name?.trim()) return;
-    const result=await supabase.rpc("create_workspace",{workspace_name:name.trim()});
-    if(result.error){notify(result.error.message);return;}
-    notify("Workspace created. Refreshing workspace context…");
-    window.location.reload();
-  }
-
-  async function askAssistant(){
-    if(!supabase || !user){ setAssistantAnswer("Connect to the Supabase workspace to use the grounded assistant."); return; }
-    setAssistantBusy(true);
-    const context={invoices,policies:policyData};
-    const result=await supabase.functions.invoke("agent",{body:{question:assistantQuestion,context}});
-    setAssistantBusy(false);
-    if(result.error){setAssistantAnswer("Assistant error: "+result.error.message);return;}
-    setAssistantAnswer(result.data?.answer || "No answer returned.");
-  }
-
-  async function signOut(){
-    if(supabase) await supabase.auth.signOut();
-    setUser(null);
-    setInvoices(seed);
-    setFiles([]);
-    setPolicyData(defaultPolicies);
-    setCloudReady(false);
-  }
-
-  const filtered = useMemo(function(){ return invoices.filter(function(i){ return (i.id+" "+i.customer+" "+i.status).toLowerCase().includes(query.toLowerCase()); }); },[invoices,query]);
-  const policyResults = useMemo(function(){ return policyData.filter(function(p){ return p.join(" ").toLowerCase().includes(policyQuery.toLowerCase()); }); },[policyData,policyQuery]);
-  const overdue = invoices.filter(function(i){return i.status==="Overdue"});
-  const outstanding = invoices.filter(function(i){return i.status!=="Paid"}).reduce(function(s,i){return s+i.amount},0);
-
-  function notify(text:string){ setToast(text); window.setTimeout(function(){setToast("")},2600); }
   async function runWorkflow(){
-    if(running) return;
+    if(running)return;
     setRunning(true);
-    setTrace(agentDefs.map(function(a){return {name:a[0],detail:a[1],state:"queued" as const}}));
-    for(let i=0;i<agentDefs.length;i++){
-      setTrace(function(prev){return prev.map(function(t,j){return j===i?{...t,state:"running" as const}:t})});
-      await new Promise(function(r){window.setTimeout(r,420)});
-      setTrace(function(prev){return prev.map(function(t,j){return j===i?{...t,state:"done" as const,ms:220+i*170}:t})});
+    setTrace(agents.map(a=>({name:a[0],detail:a[1],state:"queued" as const})));
+    for(let i=0;i<agents.length;i++){
+      setTrace(prev=>prev.map((x,j)=>j===i?{...x,state:"running" as const}:x));
+      await new Promise(r=>window.setTimeout(r,450));
+      setTrace(prev=>prev.map((x,j)=>j===i?{...x,state:"done" as const,ms:310+i*140}:x));
     }
-    setRunning(false);
-    if(supabase && user){
-      await supabase.from("workflow_runs").insert({user_id:user.id,workspace_id:workspace?.id,status:"completed",trace:agentDefs.map(function(a,i){return {name:a[0],detail:a[1],state:"done",ms:220+i*170};}),completed_at:new Date().toISOString()});
-    }
-    notify("Workflow complete — 3 invoices require immediate attention.");
+    if(supabase&&user)await supabase.from("workflow_runs").insert({
+      user_id:user.id,workspace_id:workspace?.id,status:"completed",
+      trace:agents.map((a,i)=>({name:a[0],detail:a[1],state:"done",ms:310+i*140})),
+      completed_at:new Date().toISOString()
+    });
+    setRunning(false);notify("Investigation complete — 3 invoices need attention.");
   }
-  async function addInvoice(){
-    const invoice:Invoice={id:"INV-"+String(1060+invoices.length-5),customer:"Demo Industries",amount:175000,due:"2026-10-18",status:"Pending",risk:"Low",po:175000,received:175000};
-    if(supabase && user){
-      const result=await supabase.from("invoices").insert({user_id:user.id,workspace_id:workspace?.id,invoice_number:invoice.id,customer:invoice.customer,amount:invoice.amount,due:invoice.due,status:invoice.status,risk:invoice.risk,po_amount:invoice.po,received_amount:invoice.received});
-      if(result.error){notify(result.error.message);return;}
+
+  async function addInvoice(data:{id:string;customer:string;amount:number;due:string;po:number;received:number}){
+    const base:Invoice={...data,status:"Pending",risk:"Low"};
+    const analysis=riskFor(base);base.risk=analysis.level;
+    if(supabase&&user){
+      const r=await supabase.from("invoices").insert({
+        user_id:user.id,workspace_id:workspace?.id,invoice_number:base.id,customer:base.customer,
+        amount:base.amount,due:base.due,status:base.status,risk:base.risk,po_amount:base.po,received_amount:base.received
+      });
+      if(r.error){notify(r.error.message);return}
     }
-    setInvoices(function(v){return [invoice,...v]});
-    notify(invoice.id+" added to the workspace.");
+    setInvoices(v=>[base,...v]);setShowNew(false);notify(base.id+" added to workspace.");
   }
+
   async function upload(file:File){
-    if(supabase && user){
-      const safeName=file.name.replace(/[^a-zA-Z0-9._-]/g,"-");
-      const path=user.id+"/"+Date.now()+"-"+safeName;
-      const uploadResult=await supabase.storage.from("documents").upload(path,file,{upsert:false});
-      if(uploadResult.error){notify(uploadResult.error.message);return;}
-      const docResult=await supabase.from("documents").insert({user_id:user.id,workspace_id:workspace?.id,file_name:file.name,storage_path:path,extracted:{status:"indexed"}});
-      if(docResult.error){notify(docResult.error.message);return;}
+    if(supabase&&user){
+      const safe=file.name.replace(/[^a-zA-Z0-9._-]/g,"-");
+      const path=user.id+"/"+Date.now()+"-"+safe;
+      const up=await supabase.storage.from("documents").upload(path,file,{upsert:false});
+      if(up.error){notify(up.error.message);return}
+      const d=await supabase.from("documents").insert({user_id:user.id,workspace_id:workspace?.id,file_name:file.name,storage_path:path,extracted:{status:"indexed"}});
+      if(d.error){notify(d.error.message);return}
     }
-    setFiles(function(v){return [file.name,...v]});
-    notify(file.name+" indexed in "+(supabase&&user?"Supabase":"Demo")+" Knowledge Base.");
+    setFiles(v=>[file.name,...v]);notify(file.name+" indexed successfully.");
   }
 
-  const nav = [
-    ["Dashboard",LayoutDashboard],["Invoices",FileText],["Agents",Bot],["Documents",UploadCloud],["Knowledge",Search],["Evaluations",ShieldCheck],["Settings",Settings]
-  ] as const;
+  async function ask(){
+    if(!supabase||!user){setAnswer("Connect the workspace backend to use the grounded assistant.");return}
+    setAssistantBusy(true);
+    const r=await supabase.functions.invoke("agent",{body:{question:assistant}});
+    setAssistantBusy(false);
+    if(r.error)setAnswer("Assistant error: "+r.error.message);
+    else setAnswer(r.data?.answer??"No grounded answer returned.");
+  }
 
-  if(supabase && !user) return <AuthScreen mode={authMode} setMode={setAuthMode} email={authEmail} setEmail={setAuthEmail} password={authPassword} setPassword={setAuthPassword} busy={authBusy} error={authError} submit={authenticate}/>;
+  const filtered=useMemo(()=>invoices.filter(i=>(i.id+" "+i.customer+" "+i.status+" "+i.risk).toLowerCase().includes(query.toLowerCase())),[invoices,query]);
+  const overdue=invoices.filter(i=>i.status==="Overdue");
+  const outstanding=invoices.filter(i=>i.status!=="Paid").reduce((s,i)=>s+i.amount,0);
+  const highRisk=invoices.filter(i=>riskFor(i).level==="High").length;
 
-  return <div className="app">\n    <aside className="sidebar">
-      <div className="brand"><div className="brandmark"><Sparkles size={18}/></div><div><b>FinPilot</b><span>Agentic finance</span></div></div><button className="workspaceSwitch" onClick={function(){setSection("Settings")}}><span className="workspaceLogo">{workspace?.name?.slice(0,1).toUpperCase() || "F"}</span><span><b>{workspace?.name || "Workspace"}</b><small>{workspace?.plan || "demo"} plan</small></span><ArrowUpRight size={13}/></button>
-      <nav>{nav.map(function(item){const N=item[0],Icon=item[1];return <button key={N} className={section===N?"active":""} onClick={function(){setSection(N)}}><Icon size={18}/>{N}</button>})}</nav>
-      <div className="sidecard"><div className="pill"><CircleDollarSign size={15}/> {supabase&&user?(workspace?.plan || "free").toUpperCase()+" PLAN":"DEMO MODE"}</div><p>{supabase&&user?(workspace?.name || "Workspace")+" · "+(workspace?.role || "member"):"Deterministic demo data. Connect Supabase for persistence."}</p><button onClick={runWorkflow} disabled={running}>{running?"Agents running…":"Run agent demo"} <ArrowUpRight size={15}/></button></div>
+  if(!user)return <AuthScreen mode={authMode} setMode={setAuthMode} email={email} setEmail={setEmail} password={password} setPassword={setPassword} busy={authBusy} error={authError} submit={auth}/>;
+
+  return <div className="saasApp">
+    <aside className={"saasSidebar "+(sidebarOpen?"open":"")}>
+      <div className="sidebarTop">
+        <div className="logo"><span><Sparkles size={15}/></span><b>finpilot</b></div>
+        <button className="mobileClose" onClick={()=>setSidebarOpen(false)}><X size={18}/></button>
+      </div>
+      <button className="workspacePicker" onClick={()=>setPage("Team & billing")}>
+        <span className="workspaceIcon">{workspace?.name?.slice(0,1).toUpperCase()||"F"}</span>
+        <span><b>{workspace?.name||"My workspace"}</b><small>{workspace?.plan||"free"} plan</small></span>
+        <ChevronDown size={14}/>
+      </button>
+      <div className="navLabel">Workspace</div>
+      <nav className="saasNav">
+        {([
+          ["Overview",LayoutDashboard],
+          ["Invoices",FileText],
+          ["Workflows",Bot],
+          ["Documents",UploadCloud],
+          ["Knowledge",ShieldCheck]
+        ] as const).map(([name,Icon])=><button key={name} className={page===name?"active":""} onClick={()=>{setPage(name);setSidebarOpen(false)}}><Icon size={17}/><span>{name}</span></button>)}
+      </nav>
+      <div className="navLabel">Manage</div>
+      <nav className="saasNav">
+        <button className={page==="Team & billing"?"active":""} onClick={()=>{setPage("Team & billing");setSidebarOpen(false)}}><Users size={17}/><span>Team & billing</span></button>
+      </nav>
+      <div className="sidebarBottom">
+        <div className="planMini"><div><span className="eyebrow">Current plan</span><b>{(workspace?.plan||"free").toUpperCase()}</b></div><CreditCard size={17}/></div>
+        <button className="profileButton" onClick={signOut}><span className="avatar">{(user.email||"MB").slice(0,2).toUpperCase()}</span><span><b>{user.email?.split("@")[0]}</b><small>Sign out</small></span><LogOut size={15}/></button>
+      </div>
     </aside>
 
-    <main className="main">
-      <header><div className="mobilebrand"><Menu size={20}/><b>FinPilot</b></div><div className="search"><Search size={16}/><input value={query} onChange={function(e){setQuery(e.target.value)}} placeholder="Search invoices, customers…"/></div><div className="headerRight"><span className="env"><i/> {supabase&&user?(cloudReady?"CLOUD":"SYNCING"):"DEMO"}</span>{user&&<button className="iconbtn" title="Sign out" onClick={signOut}><LogOut size={15}/></button>}<div className="avatar">{user?.email?.slice(0,2).toUpperCase() || "MB"}</div></div></header>
+    <div className="saasMain">
+      <header className="topbar">
+        <button className="mobileMenu" onClick={()=>setSidebarOpen(true)}><Menu size={20}/></button>
+        <div className="crumb"><span>Workspace</span><b>/</b><strong>{page}</strong></div>
+        <div className="topActions">
+          <div className="globalSearch"><Search size={15}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search invoices, vendors…"/><kbd>⌘ K</kbd></div>
+          <button className="roundButton"><Bell size={16}/><i/></button>
+        </div>
+      </header>
 
-      {section==="Dashboard" && <Dashboard runWorkflow={runWorkflow} running={running} trace={trace} overdue={overdue} outstanding={outstanding} setSection={setSection} openInvoice={function(i){setSelected(i);setMail(false)}}/>}
+      <main className="content">
+        {page==="Overview"&&<Overview outstanding={outstanding} overdue={overdue} highRisk={highRisk} invoices={invoices} runWorkflow={runWorkflow} running={running} trace={trace} open={setSelected} setPage={setPage}/>}
+        {page==="Invoices"&&<InvoicesPage invoices={filtered} query={query} setQuery={setQuery} open={setSelected} add={()=>setShowNew(true)}/>}
+        {page==="Workflows"&&<WorkflowsPage running={running} run={runWorkflow} trace={trace}/>}
+        {page==="Documents"&&<DocumentsPage files={files} upload={upload} invoices={invoices} openMatch={setSelected}/>}
+        {page==="Knowledge"&&<KnowledgePage policies={policyData} question={assistant} setQuestion={setAssistant} answer={answer} busy={assistantBusy} ask={ask}/>}
+        {page==="Team & billing"&&<SettingsPage workspace={workspace} user={user}/>}
+      </main>
+    </div>
 
-      {section==="Invoices" && <Section title="Invoices" eyebrow="Receivables workspace" action={<button className="secondary" onClick={addInvoice}><Plus size={15}/> Add demo invoice</button>}>
-        <div className="toolbar"><span>{filtered.length} records</span><b>{query?"Results for “"+query+"”":"All invoices"}</b></div>
-        <div className="table big">{filtered.length ? filtered.map(function(i){return <InvoiceRow key={i.id} invoice={i} onClick={function(){setSelected(i);setMail(false)}}/>}) : <Empty title="No invoices found" text="Try a different search term."/>}</div>
-      </Section>}
-
-      {section==="Agents" && <Section title="Agents" eyebrow="Orchestration">
-        <div className="workflowCard"><div className="workflowTop"><div><span className="eyebrow">End-to-end execution</span><h2>Agentic invoice investigation</h2><p>Planner → research → finance → documents → verification → editor.</p></div><button className="primary" onClick={runWorkflow} disabled={running}><Zap size={16}/>{running?"Running…":"Run workflow"}</button></div><TraceList trace={trace}/></div>
-        <div className="agentgrid">{agentDefs.map(function(a,idx){return <div className="agentcard" key={a[0]}><div className="agenttop"><div className="agenticon"><Bot size={17}/></div><span className="verified"><CheckCircle2 size={14}/> active</span></div><h3>{a[0]}</h3><p>{a[1]}</p><div className="meter"><i style={{width:(76+idx*3)+"%"}}/></div><small>Structured output · audit trail</small></div>})}</div>
-      </Section>}
-
-      {section==="Documents" && <Documents files={files} upload={upload} invoices={invoices} setMatch={setMatch}/>}
-
-      {section==="Knowledge" && <Section title="Knowledge base" eyebrow="RAG + citations">
-        <div className="knowledgeSearch"><Search size={16}/><input value={policyQuery} onChange={function(e){setPolicyQuery(e.target.value)}} placeholder="Search collections, approvals, payments…"/></div>
-        <div className="knowledge">{policyResults.map(function(p){return <div className="doc" key={p[0]}><FileText size={20}/><div><b>{p[0]}</b><span>{p[1]}</span><small>Source · {p[0]} {p[2]}</small></div><span className="tag">indexed</span></div>})}{!policyResults.length&&<Empty title="No policy matches" text="Try approval, collections, or payment."/>}</div>
-        <div className="card askCard"><div className="cardHead"><div><span className="eyebrow">Grounded answer</span><h2>Finance policy assistant</h2></div><ShieldCheck size={18}/></div><div className="assistantAsk"><input value={assistantQuestion} onChange={function(e){setAssistantQuestion(e.target.value)}} onKeyDown={function(e){if(e.key==="Enter")askAssistant()}}/><button className="primary" onClick={askAssistant} disabled={assistantBusy}>{assistantBusy?"Thinking…":"Ask"}</button></div><div className="bubble bot">{assistantAnswer}<small>Grounded against your Supabase invoice + policy records.</small></div></div>
-      </Section>}
-
-      {section==="Evaluations" && <Evaluations/>}
-
-      {section==="Settings" && <WorkspaceSettings workspace={workspace} members={members} inviteEmail={inviteEmail} setInviteEmail={setInviteEmail} inviteRole={inviteRole} setInviteRole={setInviteRole} inviteBusy={inviteBusy} inviteMember={inviteMember} createWorkspace={createWorkspace} settingsTab={settingsTab} setSettingsTab={setSettingsTab} user={user} openBilling={openBilling}/>}
-
-      {selected && <InvoiceModal invoice={selected} mail={mail} setMail={setMail} close={function(){setSelected(null)}}/>}
-      {match && <MatchModal invoice={match} close={function(){setMatch(null)}}/>}
-      {toast && <div className="toast"><CheckCircle2 size={16}/>{toast}</div>}
-    </main>
+    {selected&&<InvoiceDetail invoice={selected} close={()=>setSelected(null)}/>}
+    {showNew&&<NewInvoice close={()=>setShowNew(false)} save={addInvoice}/>}
+    {toast&&<div className="saasToast"><CheckCircle2 size={16}/>{toast}</div>}
   </div>
 }
 
-function WorkspaceSettings(p:{workspace:Workspace|null;members:Array<{user_id:string;role:string;created_at:string}>;inviteEmail:string;setInviteEmail:(v:string)=>void;inviteRole:string;setInviteRole:(v:string)=>void;inviteBusy:boolean;inviteMember:()=>void;createWorkspace:()=>void;settingsTab:string;setSettingsTab:(v:string)=>void;user:import("@supabase/supabase-js").User|null;openBilling:()=>void}){
-  const isAdmin=p.workspace && ["owner","admin"].includes(p.workspace.role);
-  const plan=p.workspace?.plan || "free";
-  return <Section title="Workspace settings" eyebrow="SaaS workspace" action={<button className="secondary" onClick={p.createWorkspace}><Plus size={15}/> New workspace</button>}>
-    <div className="settingsTabs">{["Workspace","Team","Billing","Usage"].map(function(tab){return <button key={tab} className={p.settingsTab===tab?"active":""} onClick={function(){p.setSettingsTab(tab)}}>{tab}</button>})}</div>
-    {p.settingsTab==="Workspace" && <div className="settingsGrid">
-      <div className="card"><div className="cardHead"><div><span className="eyebrow">Current workspace</span><h2>{p.workspace?.name || "Workspace"}</h2></div><Settings size={18}/></div><div className="settingsRow"><span>Workspace ID</span><b>{p.workspace?.id?.slice(0,8) || "—"}…</b></div><div className="settingsRow"><span>URL slug</span><b>{p.workspace?.slug || "—"}</b></div><div className="settingsRow"><span>Your role</span><span className="tag">{p.workspace?.role || "member"}</span></div></div>
-      <div className="card"><div className="cardHead"><div><span className="eyebrow">Plan</span><h2>{plan==="free"?"Free":"Pro"}</h2></div><CreditCard size={18}/></div><p className="muted">{plan==="free"?"Good for trying FinPilot with a small finance workspace.":"Your workspace has access to expanded finance operations."}</p><div className="planFeatures"><span>✓ Unlimited invoice records</span><span>✓ Agent workflow history</span><span>✓ Policy knowledge base</span><span>✓ Private document storage</span></div><button className="primary" onClick={function(){p.setSettingsTab("Billing")}}>{plan==="free"?"Upgrade workspace":"Manage subscription"}</button></div>
-    </div>}
-    {p.settingsTab==="Team" && <div className="card"><div className="cardHead"><div><span className="eyebrow">Team members</span><h2>{p.members.length} members</h2></div><Users size={18}/></div>{isAdmin && <div className="inviteBar"><input value={p.inviteEmail} onChange={function(e){p.setInviteEmail(e.target.value)}} placeholder="teammate@company.com"/><select value={p.inviteRole} onChange={function(e){p.setInviteRole(e.target.value)}}><option value="member">Member</option><option value="admin">Admin</option><option value="viewer">Viewer</option></select><button className="primary" onClick={p.inviteMember} disabled={p.inviteBusy}>{p.inviteBusy?"Inviting…":"Invite"}</button></div>}{p.members.map(function(m){return <div className="memberRow" key={m.user_id}><div className="memberAvatar">{m.user_id.slice(0,2).toUpperCase()}</div><div><b>{m.user_id===p.user?.id?"You":m.user_id.slice(0,8)+"…"}</b><span>Joined {new Date(m.created_at).toLocaleDateString()}</span></div><span className="tag">{m.role}</span></div>})}</div>}
-    {p.settingsTab==="Billing" && <div className="billingGrid"><div className="card"><span className="eyebrow">Current plan</span><h2>{plan.toUpperCase()}</h2><div className="price">{plan==="free"?"₹0":"Custom"}</div><p className="muted">Billing is workspace-level, so your team shares one subscription and one usage pool.</p><button className="primary" onClick={p.openBilling}><CreditCard size={16}/> {plan==="free"?"Upgrade to Pro":"Open billing portal"}</button></div><div className="card"><span className="eyebrow">SaaS billing architecture</span><h2>Stripe-ready</h2><p className="muted">Subscriptions, customer IDs, plan status and billing period are stored against this workspace. Stripe checkout can be enabled without changing the product UI.</p><div className="billingSteps"><span>1 · Workspace created</span><span>2 · Subscription attached</span><span>3 · Usage tracked</span><span>4 · Checkout / portal</span></div></div></div>}
-    {p.settingsTab==="Usage" && <div className="usageGrid"><UsageCard label="Invoices" used={12} limit={100}/><UsageCard label="AI agent runs" used={7} limit={25}/><UsageCard label="Documents" used={4} limit={25}/><UsageCard label="Team members" used={p.members.length} limit={5}/></div>}
-  </Section>
-}
-function UsageCard(p:{label:string;used:number;limit:number}){const pct=Math.min(100,Math.round(p.used/p.limit*100));return <div className="card usageCard"><span className="eyebrow">{p.label}</span><div className="usageNumbers"><b>{p.used}</b><span>/ {p.limit}</span></div><div className="usageBar"><i style={{width:pct+"%"}}/></div><small>{pct}% used this period</small></div>}
-
-function Dashboard(props:{runWorkflow:()=>void;running:boolean;trace:Trace[];overdue:Invoice[];outstanding:number;setSection:(s:string)=>void;openInvoice:(i:Invoice)=>void}){
-  return <><section className="hero"><div><div className="eyebrow">Finance operations copilot</div><h1>Turn finance work into<br/><span>verified agent workflows.</span></h1><p>Investigate invoices, ground answers in policy, verify every claim, and draft next actions — without leaving one workspace.</p><div className="heroActions"><button className="primary" onClick={props.runWorkflow} disabled={props.running}><Bot size={17}/>{props.running?"Running agents…":"Run invoice risk analysis"}</button><button className="secondary" onClick={function(){props.setSection("Invoices")}}>Explore invoices <ArrowUpRight size={16}/></button></div></div><div className="heroVisual"><div className="traceHead"><span>Live agent trace</span><span className="live"><i/> {props.running?"processing":"ready"}</span></div><TraceList trace={props.trace} compact/></div></section>
-  <section className="stats"><Stat label="Outstanding" value={money(props.outstanding)} change="+8.4%"/><Stat label="Overdue invoices" value={String(props.overdue.length)} change="2 high risk"/><Stat label="Auto-verified claims" value="94.2%" change="+4.1 pts"/><Stat label="Avg. response" value="3.1s" change="-22%"/></section>
-  <section className="grid2"><div className="card"><div className="cardHead"><div><span className="eyebrow">Priority queue</span><h2>Invoices needing attention</h2></div><button className="iconbtn" onClick={function(){props.setSection("Invoices")}}><ArrowUpRight size={16}/></button></div><div className="table">{props.overdue.slice(0,3).map(function(i){return <InvoiceRow key={i.id} invoice={i} onClick={function(){props.openInvoice(i)}}/>})}</div></div><div className="card"><div className="cardHead"><div><span className="eyebrow">Knowledge grounded</span><h2>Finance policy assistant</h2></div><div className="messageDot">AI</div></div><div className="chat"><div className="bubble bot">According to the Collections Policy, invoices become eligible for escalation after <b>14 days overdue</b>.<small>Source · Collections Policy §3.2</small></div><div className="ask"><b>Grounding:</b> 3 source records checked · 0 unsupported claims</div></div></div></section></>
-}
-
-function TraceList(props:{trace:Trace[];compact?:boolean}){return <div className={"traceList"+(props.compact?" compact":"")}>{props.trace.map(function(t,i){return <div className="trace" key={t.name}><div className={"traceIcon "+t.state}>{t.state==="done"?<Check size={15}/>:t.state==="running"?<Activity size={15}/>:<span>{i+1}</span>}</div><div><b>{t.name}</b><span>{t.detail}</span></div><em>{t.state==="done" ? String(t.ms)+"ms" : t.state}</em></div>})}</div>}
-
-function Documents(props:{files:string[];upload:(f:File)=>void;invoices:Invoice[];setMatch:(i:Invoice)=>void}){
- const [drag,setDrag]=useState(false);
- return <Section title="Documents" eyebrow="OCR + three-way matching"><div className={"dropzone"+(drag?" drag":"")} onDragOver={function(e){e.preventDefault();setDrag(true)}} onDragLeave={function(){setDrag(false)}} onDrop={function(e){e.preventDefault();setDrag(false);const f=e.dataTransfer.files[0];if(f)props.upload(f)}}><UploadCloud size={30}/><h3>Drop an invoice or PO here</h3><p>Demo extraction runs locally; PDF, PNG, JPG and CSV are accepted.</p><label className="secondary fileButton">Choose document<input type="file" accept=".pdf,.png,.jpg,.jpeg,.csv" onChange={function(e){const f=e.target.files&&e.target.files[0];if(f)props.upload(f)}}/></label></div>
- <div className="card"><div className="cardHead"><div><span className="eyebrow">Three-way matching</span><h2>Invoice → purchase order → receipt</h2></div><ClipboardCheck size={19}/></div><p className="muted">Select a seeded invoice to run a deterministic match and surface mismatches.</p><div className="matchList">{props.invoices.map(function(i){return <button key={i.id} onClick={function(){props.setMatch(i)}}><div><b>{i.id}</b><span>{i.customer} · {money(i.amount)}</span></div><ArrowUpRight size={15}/></button>})}</div></div>
- {props.files.length>0 && <div className="card"><div className="cardHead"><div><span className="eyebrow">Indexed documents</span><h2>{props.files.length} document{props.files.length>1?"s":""}</h2></div></div>{props.files.map(function(name){return <div className="uploaded" key={name}><FileText size={17}/><span>{name}</span><span className="tag">extracted</span></div>})}</div>}
- </Section>
-}
-
-function MatchModal(props:{invoice:Invoice;close:()=>void}){const i=props.invoice;const pass=i.amount===i.po&&i.amount===i.received;return <div className="modalWrap" onClick={props.close}><div className="modal" onClick={function(e){e.stopPropagation()}}><button className="close" onClick={props.close}><X size={18}/></button><span className="eyebrow">Three-way match</span><h2>{i.id}</h2><p className="muted">{i.customer}</p><div className="matchGrid"><MatchCell label="Invoice" value={money(i.amount)} ok={i.amount===i.po}/><MatchCell label="Purchase order" value={money(i.po)} ok={i.amount===i.po}/><MatchCell label="Goods received" value={money(i.received)} ok={i.amount===i.received}/></div><div className={pass?"verifyBox":"warningBox"}>{pass?<CheckCircle2 size={20}/>:<ShieldCheck size={20}/>}<div><b>{pass?"Match passed":"Mismatch detected"}</b><p>{pass?"Invoice, PO and receipt values agree. Payment can proceed to approval.":"Invoice "+money(i.amount)+" differs from a source record. Review the discrepancy before approval."}</p></div></div></div></div>}
-function MatchCell(p:{label:string;value:string;ok:boolean}){return <div><span>{p.label}</span><b>{p.value}</b><small className={p.ok?"ok":"bad"}>{p.ok?"MATCH":"MISMATCH"}</small></div>}
-function InvoiceRow(p:{invoice:Invoice;onClick:()=>void}){const i=p.invoice;return <div className="row" onClick={p.onClick}><div><b>{i.id}</b><span>{i.customer}</span></div><div><b>{money(i.amount)}</b><span className={"status "+i.status.toLowerCase()}>{i.status}</span></div><span className={"risk "+i.risk.toLowerCase()}>{i.risk} risk</span><ArrowUpRight size={16}/></div>}
-function InvoiceModal(p:{invoice:Invoice;mail:boolean;setMail:(v:boolean)=>void;close:()=>void}){
-  const i=p.invoice;
-  const analysis = computeRiskAnalysis(i);
-  const threeWayPass = i.amount===i.po && i.amount===i.received;
-  return <div className="modalWrap" onClick={p.close}><div className="modal modalWide" onClick={function(e){e.stopPropagation()}}>
-    <button className="close" onClick={p.close}><X size={18}/></button>
-    <span className="eyebrow">Invoice investigation</span>
-    <h2>{i.id}</h2>
-    <p className="muted">{i.customer} · {money(i.amount)}</p>
-
-    <div className="detailGrid">
-      <div><span>Computed risk</span><b className={"risk "+analysis.level.toLowerCase()}>{analysis.level}</b></div>
-      <div><span>Due date</span><b>{i.due}</b></div>
-      <div><span>Status</span><b>{i.status}</b></div>
-      <div><span>Signals</span><b>{analysis.signals.length} detected</b></div>
+function Overview(p:{outstanding:number;overdue:Invoice[];highRisk:number;invoices:Invoice[];runWorkflow:()=>void;running:boolean;trace:Trace[];open:(i:Invoice)=>void;setPage:(p:Page)=>void}){
+  const paid=p.invoices.filter(i=>i.status==="Paid").reduce((s,i)=>s+i.amount,0);
+  return <div className="dashboard">
+    <div className="welcomeRow">
+      <div><span className="eyebrow">FINANCE OPERATIONS</span><h1>Good evening. Here's your control room.</h1><p>Monitor cash exposure, resolve invoice exceptions and run verified finance workflows.</p></div>
+      <button className="primary" onClick={p.runWorkflow} disabled={p.running}><Zap size={16}/>{p.running?"Running workflow…":"Run AI investigation"}</button>
     </div>
 
-    {/* Three-way match summary */}
-    <div className="matchGrid">
-      <MatchCell label="Invoice" value={money(i.amount)} ok={i.amount===i.po}/>
-      <MatchCell label="Purchase order" value={money(i.po)} ok={i.amount===i.po}/>
-      <MatchCell label="Goods received" value={money(i.received)} ok={i.amount===i.received}/>
+    <div className="metricGrid">
+      <Metric label="Outstanding" value={moneyShort(p.outstanding)} sub="Across open invoices" icon={Wallet} trend="+8.4%" positive={false}/>
+      <Metric label="Overdue" value={String(p.overdue.length)} sub="Invoices need action" icon={Activity} trend={p.overdue.length+" open"} positive={false}/>
+      <Metric label="High risk" value={String(p.highRisk)} sub="Require review" icon={ShieldCheck} trend="Priority" positive={false}/>
+      <Metric label="Collected" value={moneyShort(paid)} sub="Paid this cycle" icon={CircleDollarSign} trend="+12.8%" positive={true}/>
     </div>
 
-    {/* Risk signals */}
-    {analysis.signals.length > 0 && <div className="riskSignals">
-      <div className="riskSignalsHead"><ShieldCheck size={16}/><b>Risk signals</b></div>
-      {analysis.signals.map(function(sig){return <div className="riskSignal" key={sig.label}>
-        <div className="signalDot"/>
-        <div><b>{sig.label}</b><span>{sig.detail}</span><small>Source · {sig.source}</small></div>
-      </div>})}
-    </div>}
+    <div className="dashboardGrid">
+      <section className="panel cashPanel">
+        <PanelHead eyebrow="Cash exposure" title="Receivables by status" action={<button className="textButton" onClick={()=>p.setPage("Invoices")}>View all <ArrowUpRight size={14}/></button>}/>
+        <div className="cashChart">
+          <div className="chartTotal"><span>Open receivables</span><b>{money(p.outstanding)}</b></div>
+          <div className="bars">{[34,48,42,67,55,76,63,88,71,94,80,72].map((h,i)=><div className="bar" key={i}><i style={{height:h+"%"}}/><span>{i%3===0?"W"+(i/3+1):""}</span></div>)}</div>
+        </div>
+        <div className="legend"><span><i className="dot overdue"/>Overdue {moneyShort(p.overdue.reduce((s,i)=>s+i.amount,0))}</span><span><i className="dot pending"/>Pending {moneyShort(p.invoices.filter(i=>i.status==="Pending").reduce((s,i)=>s+i.amount,0))}</span><span><i className="dot paid"/>Paid {moneyShort(paid)}</span></div>
+      </section>
 
-    {/* Recommendation */}
-    <div className={analysis.level==="High"?"warningBox":analysis.level==="Medium"?"warningBox":"verifyBox"}>
-      {analysis.level==="Low"?<CheckCircle2 size={20}/>:<ShieldCheck size={20}/>}
-      <div>
-        <b>Recommendation</b>
-        <p>{analysis.recommendation}</p>
-      </div>
+      <section className="panel workflowPanel">
+        <PanelHead eyebrow="AI CONTROL PLANE" title="Latest workflow" action={<span className="liveBadge"><i/> {p.running?"Running":"Ready"}</span>}/>
+        <Trace trace={p.trace}/>
+        <button className="secondary wide" onClick={()=>p.setPage("Workflows")}>Open workflow center <ArrowUpRight size={14}/></button>
+      </section>
     </div>
 
-    {/* Sources */}
-    {analysis.signals.length > 0 && <div className="sourceList">
-      <small className="eyebrow">Sources</small>
-      {analysis.signals.map(function(sig){return <div className="sourceItem" key={sig.source}><FileText size={14}/><span>{sig.source}</span></div>})}
-      <div className="sourceItem"><FileText size={14}/><span>Invoice {i.id}</span></div>
-    </div>}
+    <div className="dashboardGrid lower">
+      <section className="panel">
+        <PanelHead eyebrow="PRIORITY QUEUE" title="Needs your attention" action={<button className="textButton" onClick={()=>p.setPage("Invoices")}>All invoices <ArrowUpRight size={14}/></button>}/>
+        <div className="invoiceList">{p.overdue.slice(0,4).map(i=><PriorityInvoice key={i.id} invoice={i} open={p.open}/>)}</div>
+      </section>
+      <section className="panel activityPanel">
+        <PanelHead eyebrow="ACTIVITY" title="Workspace activity"/>
+        <div className="activityList">
+          <ActivityItem icon={Bot} title="Risk analysis completed" detail="INV-1038 · 6 agents · 3.2s" time="2m ago"/>
+          <ActivityItem icon={ClipboardCheck} title="Mismatch detected" detail="INV-1045 · ₹10K variance" time="18m ago"/>
+          <ActivityItem icon={UploadCloud} title="Document indexed" detail="northstar-po.pdf" time="42m ago"/>
+          <ActivityItem icon={Users} title="Workspace member added" detail="Finance team" time="1h ago"/>
+        </div>
+      </section>
+    </div>
+  </div>
+}
 
-    <button className="primary full" onClick={function(){p.setMail(true)}}><Mail size={17}/>Draft follow-up email</button>
-    {p.mail&&<div className="email"><div className="emailHead"><b>Draft email</b><span>AI generated · editable</span></div><p>Subject: Follow-up on {i.id}</p><p>Hi {i.customer} team,<br/><br/>Our records show {i.id} for {money(i.amount)} is currently {i.status.toLowerCase()}. {analysis.level!=="Low"?"We have identified "+analysis.signals.length+" risk signal"+(analysis.signals.length>1?"s":"")+" that require attention. ":""}Could you share an update on the expected payment date?<br/><br/>Thanks,<br/>Finance Operations</p></div>}
-  </div></div>}
+function Metric(p:{label:string;value:string;sub:string;icon:React.ElementType;trend:string;positive:boolean}){
+  const Icon=p.icon;
+  return <div className="metricCard"><div className="metricIcon"><Icon size={17}/></div><span>{p.label}</span><b>{p.value}</b><div><small>{p.sub}</small><em className={p.positive?"positive":""}>{p.trend}</em></div></div>
+}
+function PanelHead(p:{eyebrow:string;title:string;action?:React.ReactNode}){return <div className="panelHead"><div><span className="eyebrow">{p.eyebrow}</span><h2>{p.title}</h2></div>{p.action}</div>}
+function ActivityItem(p:{icon:React.ElementType;title:string;detail:string;time:string}){const I=p.icon;return <div className="activityItem"><div className="activityIcon"><I size={15}/></div><div><b>{p.title}</b><span>{p.detail}</span></div><small>{p.time}</small></div>}
+function PriorityInvoice(p:{invoice:Invoice;open:(i:Invoice)=>void}){const i=p.invoice;const a=riskFor(i);return <button className="priorityInvoice" onClick={()=>p.open(i)}><div className="priorityIcon"><FileText size={16}/></div><div><b>{i.id}</b><span>{i.customer} · {money(i.amount)}</span></div><span className={"riskBadge "+a.level.toLowerCase()}>{a.level}</span><ArrowUpRight size={15}/></button>}
+function Trace(p:{trace:Trace[]}){return <div className="traceBox">{p.trace.map((t,i)=><div className="traceLine" key={t.name}><div className={"traceState "+t.state}>{t.state==="done"?<Check size={12}/>:t.state==="running"?<Activity size={12}/>:i+1}</div><div><b>{t.name}</b><span>{t.detail}</span></div><small>{t.state==="done"?t.ms+"ms":t.state}</small></div>)}</div>}
 
-function Evaluations(){return <Section title="Evaluation lab" eyebrow="Prompt QA"><div className="evalgrid"><Eval label="Factual accuracy" value="94.2%" delta="+12.4 pts"/><Eval label="Hallucination rate" value="3.1%" delta="-7.9 pts"/><Eval label="Tool success" value="95.4%" delta="+9.8 pts"/><Eval label="Avg latency" value="3.1s" delta="-22%"/></div><div className="card"><div className="cardHead"><div><span className="eyebrow">Prompt benchmark</span><h2>Version comparison</h2></div></div><div className="bench"><div><span>Finance Agent v1</span><strong>82.0%</strong></div><div><span>Finance Agent v2</span><strong>94.2%</strong></div><div><span>Verification v1</span><strong>91.6%</strong></div></div><div className="benchmarkNote"><CheckCircle2 size={16}/> 100 seeded finance questions · deterministic demo metrics</div></div></Section>}
-function Stat(p:{label:string;value:string;change:string}){return <div className="stat"><span>{p.label}</span><b>{p.value}</b><em>{p.change}</em></div>}
-function Eval(p:{label:string;value:string;delta:string}){return <div className="eval"><span>{p.label}</span><b>{p.value}</b><em>{p.delta}</em></div>}
-function Section(p:{title:string;eyebrow:string;children:React.ReactNode;action?:React.ReactNode}){return <section className="page"><div className="pageHead"><div><span className="eyebrow">{p.eyebrow}</span><h1>{p.title}</h1></div>{p.action}</div>{p.children}</section>}
-function Empty(p:{title:string;text:string}){return <div className="empty"><FileText size={20}/><b>{p.title}</b><span>{p.text}</span></div>}
+function InvoicesPage(p:{invoices:Invoice[];query:string;setQuery:(v:string)=>void;open:(i:Invoice)=>void;add:()=>void}){
+  const [filter,setFilter]=useState("All");
+  const list=p.invoices.filter(i=>filter==="All"||i.status===filter||i.risk===filter);
+  return <div className="pageShell"><PageTitle eyebrow="RECEIVABLES" title="Invoices" description="Investigate every invoice, exception and payment risk from one queue." action={<button className="primary" onClick={p.add}><Plus size={16}/> New invoice</button>}/>
+    <div className="tableToolbar"><div className="tableSearch"><Search size={15}/><input value={p.query} onChange={e=>p.setQuery(e.target.value)} placeholder="Search invoice or vendor…"/></div><div className="filterGroup">{["All","Overdue","Pending","Paid","High"].map(x=><button key={x} className={filter===x?"active":""} onClick={()=>setFilter(x)}>{x}</button>)}</div></div>
+    <div className="dataTable"><div className="tableHeader"><span>Invoice</span><span>Vendor</span><span>Amount</span><span>Due</span><span>Status</span><span>Risk</span><span/></div>{list.map(i=><div className="tableRow" key={i.id} onClick={()=>p.open(i)}><span className="invoiceCode">{i.id}</span><span>{i.customer}</span><b>{money(i.amount)}</b><span>{i.due}</span><span className={"statusBadge "+i.status.toLowerCase()}>{i.status}</span><span className={"riskBadge "+riskFor(i).level.toLowerCase()}>{riskFor(i).level}</span><ArrowUpRight size={15}/></div>)}{!list.length&&<div className="tableEmpty">No invoices match your filters.</div>}</div>
+  </div>
+}
+
+function WorkflowsPage(p:{running:boolean;run:()=>void;trace:Trace[]}){
+  return <div className="pageShell"><PageTitle eyebrow="AUTOMATION" title="Workflow center" description="Run, inspect and audit FinPilot's finance agents." action={<button className="primary" onClick={p.run} disabled={p.running}><Zap size={16}/>{p.running?"Running…":"Run workflow"}</button>}/>
+    <div className="workflowHero"><div className="workflowHeroIcon"><Bot size={23}/></div><div><span className="eyebrow">DEFAULT PLAYBOOK</span><h2>Invoice investigation</h2><p>One click routes an invoice through six specialist agents and produces a verified recommendation.</p></div><div className="workflowStats"><div><b>6</b><span>agents</span></div><div><b>3.1s</b><span>avg. latency</span></div><div><b>94.2%</b><span>accuracy*</span></div></div></div>
+    <div className="workflowColumns"><div className="panel"><PanelHead eyebrow="LIVE EXECUTION" title="Agent trace"/><Trace trace={p.trace}/></div><div className="panel"><PanelHead eyebrow="PLAYBOOK" title="What happens next"/><div className="playbook">{agents.map((a,i)=><div key={a[0]}><span>{String(i+1).padStart(2,"0")}</span><div><b>{a[0]}</b><small>{a[1]}</small></div></div>)}</div></div></div>
+    <div className="demoNote">* Evaluation numbers are seeded demo benchmarks, not production performance claims.</div>
+  </div>
+}
+
+function DocumentsPage(p:{files:string[];upload:(f:File)=>void;invoices:Invoice[];openMatch:(i:Invoice)=>void}){
+  const [drag,setDrag]=useState(false);
+  return <div className="pageShell"><PageTitle eyebrow="DOCUMENTS" title="Document intelligence" description="Upload invoices, purchase orders and receipts. Then verify them against each other."/>
+    <label className={"uploadPanel "+(drag?"drag":"")} onDragOver={e=>{e.preventDefault();setDrag(true)}} onDragLeave={()=>setDrag(false)} onDrop={e=>{e.preventDefault();setDrag(false);const f=e.dataTransfer.files[0];if(f)p.upload(f)}}><div className="uploadIcon"><UploadCloud size={22}/></div><h3>Drop a finance document here</h3><p>PDF, PNG, JPG or CSV · private workspace storage</p><span className="secondary">Choose document<input type="file" accept=".pdf,.png,.jpg,.jpeg,.csv" onChange={e=>{const f=e.target.files?.[0];if(f)p.upload(f)}}/></span></label>
+    <div className="sectionLabel">THREE-WAY MATCHING</div>
+    <div className="matchCards">{p.invoices.map(i=>{const pass=i.amount===i.po&&i.amount===i.received;return <button className="matchCard" key={i.id} onClick={()=>p.openMatch(i)}><div className="matchCardTop"><span className={pass?"matchOk":"matchWarn"}>{pass?"MATCH":"REVIEW"}</span><ArrowUpRight size={15}/></div><b>{i.id}</b><span>{i.customer}</span><div className="miniMatch"><i className={i.amount===i.po?"ok":""}/><i className={i.po===i.received?"ok":""}/><i className={i.amount===i.received?"ok":""}/></div><small>Invoice · PO · Receipt</small></button>})}</div>
+    {p.files.length>0&&<div className="panel"><PanelHead eyebrow="INDEXED" title="Recent documents"/>{p.files.map(f=><div className="fileRow" key={f}><div className="fileIcon"><FileText size={15}/></div><div><b>{f}</b><span>Indexed · extracted fields available</span></div><span className="statusBadge paid">Ready</span></div>)}</div>}
+  </div>
+}
+
+function KnowledgePage(p:{policies:string[][];question:string;setQuestion:(v:string)=>void;answer:string;busy:boolean;ask:()=>void}){
+  const [q,setQ]=useState("");
+  const results=p.policies.filter(x=>x.join(" ").toLowerCase().includes(q.toLowerCase()));
+  return <div className="pageShell"><PageTitle eyebrow="KNOWLEDGE" title="Finance knowledge" description="Policies are the source of truth behind every recommendation."/>
+    <div className="knowledgeHero"><div><div className="aiBadge"><Sparkles size={14}/> Grounded AI</div><h2>Ask your finance policies anything.</h2><p>FinPilot retrieves policy context before answering, so your team can see where each recommendation came from.</p></div><div className="assistantBox"><input value={p.question} onChange={e=>p.setQuestion(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")p.ask()}}/><button className="primary" onClick={p.ask} disabled={p.busy}>{p.busy?"Thinking…":"Ask"}</button></div><div className="answerBox"><div className="answerHeader"><span>FinPilot answer</span><span className="verified"><CheckCircle2 size={13}/> Grounded</span></div><p>{p.answer}</p><small>Sources checked · Invoice records · Finance policies</small></div></div>
+    <div className="knowledgeLayout"><div><div className="sectionLabel">POLICY LIBRARY</div><div className="policySearch"><Search size={15}/><input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search policy library…"/></div>{results.map(x=><div className="policyRow" key={x[0]}><div className="policyIcon"><ShieldCheck size={16}/></div><div><b>{x[0]}</b><p>{x[1]}</p><small>Policy citation · {x[2]}</small></div><ArrowUpRight size={15}/></div>)}</div><div className="panel policyAside"><span className="eyebrow">GROUNDING</span><h3>Why this matters</h3><p>Every answer should point back to a record your finance team can inspect.</p><div className="groundingStat"><b>3</b><span>source records<br/>checked per answer</span></div><div className="groundingStat"><b>0</b><span>unsupported claims<br/>in this demo</span></div></div></div>
+  </div>
+}
+
+function SettingsPage(p:{workspace:Workspace|null;user:import("@supabase/supabase-js").User}){
+  const [tab,setTab]=useState("Workspace");
+  const [members,setMembers]=useState<Array<{user_id:string;role:string;created_at:string}>>([]);
+  const [email,setEmail]=useState("");
+  const [role,setRole]=useState("member");
+  const [busy,setBusy]=useState(false);
+  useEffect(()=>{if(!supabase||!p.workspace)return;supabase.from("workspace_members").select("user_id,role,created_at").eq("workspace_id",p.workspace.id).then(r=>{if(!r.error)setMembers(r.data??[])})},[p.workspace?.id]);
+  async function invite(){if(!supabase||!p.workspace||!email)return;setBusy(true);const r=await supabase.from("workspace_invites").insert({workspace_id:p.workspace.id,email:email.toLowerCase(),role,invited_by:p.user.id});setBusy(false);if(r.error)alert(r.error.message);else{setEmail("");alert("Invitation created.")}}
+  return <div className="pageShell"><PageTitle eyebrow="ADMINISTRATION" title="Workspace" description="Manage your finance team, subscription and usage."/>
+    <div className="settingsNav">{["Workspace","Team","Billing","Usage"].map(x=><button className={tab===x?"active":""} onClick={()=>setTab(x)} key={x}>{x}</button>)}</div>
+    {tab==="Workspace"&&<div className="settingsGrid"><div className="panel"><PanelHead eyebrow="WORKSPACE" title={p.workspace?.name||"My workspace"}/><div className="settingLine"><span>Plan</span><b>{(p.workspace?.plan||"free").toUpperCase()}</b></div><div className="settingLine"><span>Workspace ID</span><code>{p.workspace?.id?.slice(0,18)}…</code></div><div className="settingLine"><span>Your role</span><b>{p.workspace?.role||"owner"}</b></div></div><div className="panel upgradePanel"><div className="aiBadge">FINPILOT PRO</div><h2>Scale finance operations.</h2><p>Unlock higher AI usage, larger document limits and team controls.</p><button className="primary" onClick={()=>alert("Stripe checkout is ready once STRIPE_PRO_PRICE_ID is configured in Supabase.")}>Upgrade plan <ArrowUpRight size={15}/></button></div></div>}
+    {tab==="Team"&&<div className="panel"><PanelHead eyebrow="TEAM" title={members.length+" members"}/><div className="inviteForm"><input value={email} onChange={e=>setEmail(e.target.value)} placeholder="teammate@company.com"/><select value={role} onChange={e=>setRole(e.target.value)}><option value="member">Member</option><option value="admin">Admin</option><option value="viewer">Viewer</option></select><button className="primary" onClick={invite} disabled={busy}><UserPlus size={15}/>{busy?"Inviting…":"Invite"}</button></div>{members.map(m=><div className="memberLine" key={m.user_id}><span className="avatar">{m.user_id.slice(0,2).toUpperCase()}</span><div><b>{m.user_id===p.user.id?"You":m.user_id.slice(0,8)+"…"}</b><small>{m.role} · joined {new Date(m.created_at).toLocaleDateString()}</small></div><span className="rolePill">{m.role}</span></div>)}</div>}
+    {tab==="Billing"&&<div className="settingsGrid"><div className="panel billingMain"><span className="eyebrow">CURRENT PLAN</span><h2>{(p.workspace?.plan||"free").toUpperCase()}</h2><div className="billingPrice">{p.workspace?.plan==="free"?"₹0":"Custom"}<small>/ month</small></div><p>Workspace-level billing. Your whole team shares one subscription and usage pool.</p><button className="primary" onClick={()=>alert("Configure Stripe secrets in Supabase to activate checkout.")}><CreditCard size={15}/> Manage billing</button></div><div className="panel"><span className="eyebrow">BILLING ARCHITECTURE</span><h3>Stripe-ready</h3><p className="muted">Checkout, customer IDs, subscriptions and webhooks are already structured in the backend.</p><div className="billingSteps"><span>01 · Workspace</span><span>02 · Customer</span><span>03 · Subscription</span><span>04 · Webhook sync</span></div></div></div>}
+    {tab==="Usage"&&<div className="usageGrid"><Usage title="Invoices" used={12} limit={100}/><Usage title="AI runs" used={7} limit={25}/><Usage title="Documents" used={4} limit={25}/><Usage title="Team members" used={members.length} limit={5}/></div>}
+  </div>
+}
+function Usage(p:{title:string;used:number;limit:number}){const pct=Math.min(100,Math.round(p.used/p.limit*100));return <div className="panel usage"><span className="eyebrow">{p.title}</span><b>{p.used}<small> / {p.limit}</small></b><div><i style={{width:pct+"%"}}/></div><span>{pct}% used this period</span></div>}
+
+function PageTitle(p:{eyebrow:string;title:string;description:string;action?:React.ReactNode}){return <div className="pageTitle"><div><span className="eyebrow">{p.eyebrow}</span><h1>{p.title}</h1><p>{p.description}</p></div>{p.action}</div>}
+
+function InvoiceDetail(p:{invoice:Invoice;close:()=>void}){
+  const a=riskFor(p.invoice);const match=p.invoice.amount===p.invoice.po&&p.invoice.amount===p.invoice.received;
+  return <div className="overlay" onClick={p.close}><div className="detailDrawer" onClick={e=>e.stopPropagation()}><div className="drawerTop"><span className="eyebrow">INVOICE INVESTIGATION</span><button className="roundButton" onClick={p.close}><X size={16}/></button></div><div className="invoiceTitle"><div><span className="invoiceCode large">{p.invoice.id}</span><h2>{p.invoice.customer}</h2></div><span className={"riskBadge "+a.level.toLowerCase()}>{a.level} risk</span></div><div className="amountHero"><span>Invoice amount</span><b>{money(p.invoice.amount)}</b><small>Due {p.invoice.due} · {p.invoice.status}</small></div><div className="detailSection"><span className="eyebrow">VERIFICATION</span><div className="verifyGrid"><Verify label="Invoice" ok={true} value={money(p.invoice.amount)}/><Verify label="Purchase order" ok={p.invoice.amount===p.invoice.po} value={money(p.invoice.po)}/><Verify label="Goods received" ok={p.invoice.amount===p.invoice.received} value={money(p.invoice.received)}/></div></div><div className="detailSection"><span className="eyebrow">WHY THIS RISK?</span>{a.reasons.map(x=><div className="reason" key={x}><ShieldCheck size={14}/><span>{x}</span></div>)}<div className={a.level==="Low"?"recommend good":"recommend"}><b>Recommended action</b><p>{a.recommendation}</p></div></div><div className="detailSection"><span className="eyebrow">SOURCES</span><div className="source"><FileText size={14}/><span>Invoice record · {p.invoice.id}</span><Check size={13}/></div><div className="source"><ShieldCheck size={14}/><span>Invoice Approval Matrix §2.1</span><Check size={13}/></div><div className="source"><ShieldCheck size={14}/><span>Vendor Payment SOP §4.4</span><Check size={13}/></div></div><button className="primary wide" onClick={()=>alert("Editable email draft generated for "+p.invoice.customer+".")}><FileText size={15}/> Draft follow-up email</button></div></div>
+}
+function Verify(p:{label:string;ok:boolean;value:string}){return <div className="verifyCard"><span>{p.label}</span><b>{p.value}</b><small className={p.ok?"ok":"bad"}>{p.ok?"VERIFIED":"MISMATCH"}</small></div>}
+
+function NewInvoice(p:{close:()=>void;save:(d:{id:string;customer:string;amount:number;due:string;po:number;received:number})=>void}){
+  const [id,setId]=useState("INV-1060"),[customer,setCustomer]=useState(""),[amount,setAmount]=useState(""),[due,setDue]=useState(""),[po,setPo]=useState(""),[received,setReceived]=useState("");
+  const ready=id&&customer&&amount&&due&&po&&received;
+  return <div className="overlay" onClick={p.close}><div className="modalCard" onClick={e=>e.stopPropagation()}><div className="modalHead"><div><span className="eyebrow">NEW RECORD</span><h2>Add invoice</h2></div><button className="roundButton" onClick={p.close}><X size={16}/></button></div><div className="formGrid"><label>Invoice number<input value={id} onChange={e=>setId(e.target.value)}/></label><label>Vendor<input value={customer} onChange={e=>setCustomer(e.target.value)} placeholder="Acme Corp"/></label><label>Amount<input type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="480000"/></label><label>Due date<input type="date" value={due} onChange={e=>setDue(e.target.value)}/></label><label>PO amount<input type="number" value={po} onChange={e=>setPo(e.target.value)} placeholder="480000"/></label><label>Goods received<input type="number" value={received} onChange={e=>setReceived(e.target.value)} placeholder="480000"/></label></div><div className="modalFooter"><button className="secondary" onClick={p.close}>Cancel</button><button className="primary" disabled={!ready} onClick={()=>p.save({id,customer,amount:Number(amount),due,po:Number(po),received:Number(received)})}>Create invoice</button></div></div></div>
+}
 
 function AuthScreen(p:{mode:"signin"|"signup";setMode:(m:"signin"|"signup")=>void;email:string;setEmail:(v:string)=>void;password:string;setPassword:(v:string)=>void;busy:boolean;error:string;submit:()=>void}){
-  return <div className="authShell"><div className="authCard">
-    <div className="authBrand"><div className="brandmark" style={{display:"inline-grid"}}><Sparkles size={18}/></div></div>
-    <h1>{p.mode==="signin"?"Sign in":"Create account"}</h1>
-    <p className="authIntro">{p.mode==="signin"?"Sign in to your FinPilot workspace.":"Create a new account to get started with FinPilot."}</p>
-    <label>Email<input type="email" value={p.email} onChange={function(e){p.setEmail(e.target.value)}} placeholder="you@company.com"/></label>
-    <label>Password<input type="password" value={p.password} onChange={function(e){p.setPassword(e.target.value)}} placeholder="••••••••" onKeyDown={function(e){if(e.key==="Enter")p.submit()}}/></label>
-    {p.error && <div className="authError">{p.error}</div>}
-    <button className="primary full" onClick={p.submit} disabled={p.busy} style={{marginTop:16}}>
-      {p.busy?"Please wait…":p.mode==="signin"?<><LogIn size={15}/>Sign in</>:<><UserPlus size={15}/>Sign up</>}
-    </button>
-    <button className="authSwitch" onClick={function(){p.setMode(p.mode==="signin"?"signup":"signin")}}>
-      {p.mode==="signin"?"Don't have an account? Sign up":"Already have an account? Sign in"}
-    </button>
-  </div></div>
+  return <div className="authPage"><div className="authVisual"><div className="authBrand"><span><Sparkles size={16}/></span><b>finpilot</b></div><div className="authCopy"><span className="eyebrow">AI FINANCE OPERATIONS</span><h1>Your finance team,<br/><i>on autopilot.</i></h1><p>Investigate invoices, verify payment decisions and turn finance work into auditable agent workflows.</p><div className="authProof"><span><CheckCircle2 size={14}/> Policy grounded</span><span><CheckCircle2 size={14}/> Audit ready</span><span><CheckCircle2 size={14}/> Team workspace</span></div></div><div className="authMock"><div/><div/><div/><div/></div></div><div className="authCard"><div className="authLogo"><span><Sparkles size={15}/></span><b>finpilot</b></div><span className="eyebrow">{p.mode==="signin"?"WELCOME BACK":"GET STARTED"}</span><h2>{p.mode==="signin"?"Sign in to your workspace":"Create your workspace"}</h2><p>{p.mode==="signin"?"Continue where your finance team left off.":"Set up a secure finance workspace in minutes."}</p><label>Work email<input value={p.email} onChange={e=>p.setEmail(e.target.value)} placeholder="you@company.com" type="email"/></label><label>Password<input value={p.password} onChange={e=>p.setPassword(e.target.value)} placeholder="At least 6 characters" type="password" onKeyDown={e=>{if(e.key==="Enter")p.submit()}}/></label>{p.error&&<div className="formError">{p.error}</div>}<button className="primary wide" onClick={p.submit} disabled={p.busy}>{p.busy?"Please wait…":p.mode==="signin"?<><LogIn size={15}/> Sign in</>:<><UserPlus size={15}/> Create account</>}</button><button className="authSwitch" onClick={()=>p.setMode(p.mode==="signin"?"signup":"signin")}>{p.mode==="signin"?"New to FinPilot? Create an account":"Already have an account? Sign in"}</button><small className="legal">By continuing, you agree to your organization's workspace policies.</small></div></div>
 }
 
 createRoot(document.getElementById("root")!).render(<App/>);
