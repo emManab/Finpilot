@@ -1,6 +1,7 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Activity, ArrowUpRight, Bot, Check, CheckCircle2, CircleDollarSign, ClipboardCheck, FileText, LayoutDashboard, Mail, Menu, Plus, Search, ShieldCheck, Sparkles, UploadCloud, X, Zap } from "lucide-react";
+import { Activity, ArrowUpRight, Bot, Check, CheckCircle2, CircleDollarSign, ClipboardCheck, FileText, LayoutDashboard, LogIn, LogOut, Mail, Menu, Plus, Search, ShieldCheck, Sparkles, UploadCloud, UserPlus, X, Zap } from "lucide-react";
+import { supabase } from "./lib/supabase";
 import "./styles.css";
 
 type Status = "Paid" | "Overdue" | "Pending";
@@ -25,7 +26,7 @@ const agentDefs = [
   ["Editor Agent","Produces the final report and action"]
 ] as const;
 
-const policies = [
+const defaultPolicies = [
   ["Collections Policy","Invoices become eligible for escalation after 14 days overdue.","§3.2"],
   ["Invoice Approval Matrix","Invoices above ₹5L require finance lead approval.","§2.1"],
   ["Vendor Payment SOP","Three-way matching must pass before payment approval.","§4.4"]
@@ -35,6 +36,14 @@ const money = (n:number) => new Intl.NumberFormat("en-IN",{style:"currency",curr
 
 function App(){
   const [section,setSection] = useState("Dashboard");
+  const [user,setUser] = useState<import("@supabase/supabase-js").User|null>(null);
+  const [authMode,setAuthMode] = useState<"signin"|"signup">("signin");
+  const [authEmail,setAuthEmail] = useState("");
+  const [authPassword,setAuthPassword] = useState("");
+  const [authBusy,setAuthBusy] = useState(false);
+  const [authError,setAuthError] = useState("");
+  const [policyData,setPolicyData] = useState(defaultPolicies);
+  const [cloudReady,setCloudReady] = useState(false);
   const [invoices,setInvoices] = useState<Invoice[]>(seed);
   const [query,setQuery] = useState("");
   const [selected,setSelected] = useState<Invoice|null>(null);
@@ -46,8 +55,64 @@ function App(){
   const [files,setFiles] = useState<string[]>([]);
   const [match,setMatch] = useState<Invoice|null>(null);
 
+  useEffect(function(){
+    if(!supabase) return;
+    let mounted = true;
+    supabase.auth.getSession().then(function(result){
+      if(mounted) setUser(result.data.session?.user ?? null);
+    });
+    const listener = supabase.auth.onAuthStateChange(function(_event,session){
+      setUser(session?.user ?? null);
+    });
+    return function(){ mounted=false; listener.data.subscription.unsubscribe(); };
+  },[]);
+
+  useEffect(function(){
+    if(!supabase || !user) return;
+    async function loadCloud(){
+      setCloudReady(false);
+      const seedResult = await supabase!.rpc("seed_finpilot_workspace");
+      if(seedResult.error) console.warn("FinPilot seed:",seedResult.error.message);
+      const invoiceResult = await supabase!.from("invoices").select("invoice_number,customer,amount,due,status,risk,po_amount,received_amount").order("created_at",{ascending:false});
+      if(!invoiceResult.error && invoiceResult.data?.length){
+        setInvoices(invoiceResult.data.map(function(row){
+          return {id:row.invoice_number,customer:row.customer,amount:Number(row.amount),due:row.due,status:row.status,risk:row.risk,po:Number(row.po_amount),received:Number(row.received_amount)} as Invoice;
+        }));
+      }
+      const policyResult = await supabase!.from("policies").select("title,body,citation").order("created_at",{ascending:true});
+      if(!policyResult.error && policyResult.data?.length){
+        setPolicyData(policyResult.data.map(function(row){ return [row.title,row.body,row.citation] as [string,string,string]; }));
+      }
+      const documentResult = await supabase!.from("documents").select("file_name").order("created_at",{ascending:false});
+      if(!documentResult.error) setFiles((documentResult.data ?? []).map(function(row){return row.file_name;}));
+      setCloudReady(true);
+    }
+    loadCloud();
+  },[user?.id]);
+
+  async function authenticate(){
+    if(!supabase){ setAuthError("Supabase is not configured. Add VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY."); return; }
+    if(!authEmail || authPassword.length < 6){ setAuthError("Enter a valid email and a password with at least 6 characters."); return; }
+    setAuthBusy(true); setAuthError("");
+    const result = authMode==="signin"
+      ? await supabase.auth.signInWithPassword({email:authEmail,password:authPassword})
+      : await supabase.auth.signUp({email:authEmail,password:authPassword});
+    setAuthBusy(false);
+    if(result.error){ setAuthError(result.error.message); return; }
+    if(authMode==="signup" && !result.data.session) setAuthError("Account created. Check your email if confirmation is enabled, then sign in.");
+  }
+
+  async function signOut(){
+    if(supabase) await supabase.auth.signOut();
+    setUser(null);
+    setInvoices(seed);
+    setFiles([]);
+    setPolicyData(defaultPolicies);
+    setCloudReady(false);
+  }
+
   const filtered = useMemo(function(){ return invoices.filter(function(i){ return (i.id+" "+i.customer+" "+i.status).toLowerCase().includes(query.toLowerCase()); }); },[invoices,query]);
-  const policyResults = useMemo(function(){ return policies.filter(function(p){ return p.join(" ").toLowerCase().includes(policyQuery.toLowerCase()); }); },[policyQuery]);
+  const policyResults = useMemo(function(){ return policyData.filter(function(p){ return p.join(" ").toLowerCase().includes(policyQuery.toLowerCase()); }); },[policyData,policyQuery]);
   const overdue = invoices.filter(function(i){return i.status==="Overdue"});
   const outstanding = invoices.filter(function(i){return i.status!=="Paid"}).reduce(function(s,i){return s+i.amount},0);
 
@@ -62,28 +127,47 @@ function App(){
       setTrace(function(prev){return prev.map(function(t,j){return j===i?{...t,state:"done" as const,ms:220+i*170}:t})});
     }
     setRunning(false);
+    if(supabase && user){
+      await supabase.from("workflow_runs").insert({user_id:user.id,status:"completed",trace:agentDefs.map(function(a,i){return {name:a[0],detail:a[1],state:"done",ms:220+i*170};}),completed_at:new Date().toISOString()});
+    }
     notify("Workflow complete — 3 invoices require immediate attention.");
   }
-  function addInvoice(){
-    const invoice:Invoice={id:"INV-1060",customer:"Demo Industries",amount:175000,due:"2026-10-18",status:"Pending",risk:"Low",po:175000,received:175000};
+  async function addInvoice(){
+    const invoice:Invoice={id:"INV-"+String(1060+invoices.length-5),customer:"Demo Industries",amount:175000,due:"2026-10-18",status:"Pending",risk:"Low",po:175000,received:175000};
+    if(supabase && user){
+      const result=await supabase.from("invoices").insert({user_id:user.id,invoice_number:invoice.id,customer:invoice.customer,amount:invoice.amount,due:invoice.due,status:invoice.status,risk:invoice.risk,po_amount:invoice.po,received_amount:invoice.received});
+      if(result.error){notify(result.error.message);return;}
+    }
     setInvoices(function(v){return [invoice,...v]});
-    notify("INV-1060 added to the workspace.");
+    notify(invoice.id+" added to the workspace.");
   }
-  function upload(file:File){setFiles(function(v){return [file.name,...v]});notify(file.name+" indexed in Demo Knowledge Base.");}
+  async function upload(file:File){
+    if(supabase && user){
+      const safeName=file.name.replace(/[^a-zA-Z0-9._-]/g,"-");
+      const path=user.id+"/"+Date.now()+"-"+safeName;
+      const uploadResult=await supabase.storage.from("documents").upload(path,file,{upsert:false});
+      if(uploadResult.error){notify(uploadResult.error.message);return;}
+      const docResult=await supabase.from("documents").insert({user_id:user.id,file_name:file.name,storage_path:path,extracted:{status:"indexed"}});
+      if(docResult.error){notify(docResult.error.message);return;}
+    }
+    setFiles(function(v){return [file.name,...v]});
+    notify(file.name+" indexed in "+(supabase&&user?"Supabase":"Demo")+" Knowledge Base.");
+  }
 
   const nav = [
     ["Dashboard",LayoutDashboard],["Invoices",FileText],["Agents",Bot],["Documents",UploadCloud],["Knowledge",Search],["Evaluations",ShieldCheck]
   ] as const;
 
-  return <div className="app">
-    <aside className="sidebar">
+  if(supabase && !user) return <AuthScreen mode={authMode} setMode={setAuthMode} email={authEmail} setEmail={setAuthEmail} password={authPassword} setPassword={setAuthPassword} busy={authBusy} error={authError} submit={authenticate}/>;
+
+  return <div className="app">\n    <aside className="sidebar">
       <div className="brand"><div className="brandmark"><Sparkles size={18}/></div><div><b>FinPilot</b><span>Agentic finance</span></div></div>
       <nav>{nav.map(function(item){const N=item[0],Icon=item[1];return <button key={N} className={section===N?"active":""} onClick={function(){setSection(N)}}><Icon size={18}/>{N}</button>})}</nav>
-      <div className="sidecard"><div className="pill"><CircleDollarSign size={15}/> Demo mode</div><p>Deterministic finance data. No API key required.</p><button onClick={runWorkflow} disabled={running}>{running?"Agents running…":"Run agent demo"} <ArrowUpRight size={15}/></button></div>
+      <div className="sidecard"><div className="pill"><CircleDollarSign size={15}/> Demo mode</div><p>{supabase&&user?"Supabase workspace connected.":"Deterministic demo data. Connect Supabase for persistence."}</p><button onClick={runWorkflow} disabled={running}>{running?"Agents running…":"Run agent demo"} <ArrowUpRight size={15}/></button></div>
     </aside>
 
     <main className="main">
-      <header><div className="mobilebrand"><Menu size={20}/><b>FinPilot</b></div><div className="search"><Search size={16}/><input value={query} onChange={function(e){setQuery(e.target.value)}} placeholder="Search invoices, customers…"/></div><div className="headerRight"><span className="env"><i/> DEMO</span><div className="avatar">MB</div></div></header>
+      <header><div className="mobilebrand"><Menu size={20}/><b>FinPilot</b></div><div className="search"><Search size={16}/><input value={query} onChange={function(e){setQuery(e.target.value)}} placeholder="Search invoices, customers…"/></div><div className="headerRight"><span className="env"><i/> {supabase&&user?(cloudReady?"CLOUD":"SYNCING"):"DEMO"}</span>{user&&<button className="iconbtn" title="Sign out" onClick={signOut}><LogOut size={15}/></button>}<div className="avatar">{user?.email?.slice(0,2).toUpperCase() || "MB"}</div></div></header>
 
       {section==="Dashboard" && <Dashboard runWorkflow={runWorkflow} running={running} trace={trace} overdue={overdue} outstanding={outstanding} setSection={setSection} openInvoice={function(i){setSelected(i);setMail(false)}}/>}
 
