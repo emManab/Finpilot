@@ -48,3 +48,18 @@ The current public demo intentionally uses a deterministic browser-side service 
 ## Important
 
 The percentages shown in the Evaluation Lab are **demo benchmark values**, not claims about a production model. The product labels itself as Demo Mode to make that distinction explicit.
+
+
+## Supabase setup
+
+The app now supports a real authenticated Supabase workspace. The UI falls back to deterministic demo data when Supabase environment variables are absent.
+
+1. Create a Supabase project.
+2. Open **SQL Editor** and run [supabase/schema.sql](./supabase/schema.sql).
+3. In the frontend environment, add `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY`.
+4. Start the app with `npm install && npm run dev`.
+5. Create an account from the FinPilot sign-in screen.
+
+The Supabase integration persists invoices, policies, workflow runs and uploaded documents. Storage uses a private `documents` bucket with per-user RLS policies.
+
+The publishable key is safe for browser use; never put a Supabase `service_role` key in frontend code or Vite environment variables.
