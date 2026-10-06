@@ -289,7 +289,7 @@ function App(){
 
       {section==="Evaluations" && <Evaluations/>}
 
-      {section==="Settings" && <WorkspaceSettings workspace={workspace} members={members} inviteEmail={inviteEmail} setInviteEmail={setInviteEmail} inviteRole={inviteRole} setInviteRole={setInviteRole} inviteBusy={inviteBusy} inviteMember={inviteMember} createWorkspace={createWorkspace} settingsTab={settingsTab} setSettingsTab={setSettingsTab} user={user} openBilling={openBilling}/>
+      {section==="Settings" && <WorkspaceSettings workspace={workspace} members={members} inviteEmail={inviteEmail} setInviteEmail={setInviteEmail} inviteRole={inviteRole} setInviteRole={setInviteRole} inviteBusy={inviteBusy} inviteMember={inviteMember} createWorkspace={createWorkspace} settingsTab={settingsTab} setSettingsTab={setSettingsTab} user={user} openBilling={openBilling}/>}
 
       {selected && <InvoiceModal invoice={selected} mail={mail} setMail={setMail} close={function(){setSelected(null)}}/>}
       {match && <MatchModal invoice={match} close={function(){setMatch(null)}}/>}
