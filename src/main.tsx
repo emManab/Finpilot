@@ -7,7 +7,8 @@ import "./styles.css";
 type Status = "Paid" | "Overdue" | "Pending";
 type Risk = "Low" | "Medium" | "High";
 type Invoice = { id:string; customer:string; amount:number; due:string; status:Status; risk:Risk; po:number; received:number };
-type Trace = { name:string; detail:string; state:"queued"|"running"|"done"; ms?:number };\ntype Workspace = { id:string; name:string; slug:string; plan:"free"|"pro"|"business"; role:"owner"|"admin"|"member"|"viewer" };
+type Trace = { name:string; detail:string; state:"queued"|"running"|"done"; ms?:number };
+type Workspace = { id:string; name:string; slug:string; plan:"free"|"pro"|"business"; role:"owner"|"admin"|"member"|"viewer" };
 
 const seed:Invoice[] = [
   {id:"INV-1042",customer:"Acme Corp",amount:480000,due:"2026-09-15",status:"Overdue",risk:"High",po:480000,received:480000},
