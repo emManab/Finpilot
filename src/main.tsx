@@ -260,7 +260,7 @@ function App(){
   return <div className="app">\n    <aside className="sidebar">
       <div className="brand"><div className="brandmark"><Sparkles size={18}/></div><div><b>FinPilot</b><span>Agentic finance</span></div></div><button className="workspaceSwitch" onClick={function(){setSection("Settings")}}><span className="workspaceLogo">{workspace?.name?.slice(0,1).toUpperCase() || "F"}</span><span><b>{workspace?.name || "Workspace"}</b><small>{workspace?.plan || "demo"} plan</small></span><ArrowUpRight size={13}/></button>
       <nav>{nav.map(function(item){const N=item[0],Icon=item[1];return <button key={N} className={section===N?"active":""} onClick={function(){setSection(N)}}><Icon size={18}/>{N}</button>})}</nav>
-      <div className="sidecard"><div className="pill"><CircleDollarSign size={15}/> Demo mode</div><p>{supabase&&user?"Supabase workspace connected.":"Deterministic demo data. Connect Supabase for persistence."}</p><button onClick={runWorkflow} disabled={running}>{running?"Agents running…":"Run agent demo"} <ArrowUpRight size={15}/></button></div>
+      <div className="sidecard"><div className="pill"><CircleDollarSign size={15}/> {supabase&&user?(workspace?.plan || "free").toUpperCase()+" PLAN":"DEMO MODE"}</div><p>{supabase&&user?(workspace?.name || "Workspace")+" · "+(workspace?.role || "member"):"Deterministic demo data. Connect Supabase for persistence."}</p><button onClick={runWorkflow} disabled={running}>{running?"Agents running…":"Run agent demo"} <ArrowUpRight size={15}/></button></div>
     </aside>
 
     <main className="main">
