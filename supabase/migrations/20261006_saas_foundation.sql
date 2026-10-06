@@ -215,3 +215,57 @@ begin
   return new_id;
 end;
 $$;
+
+create or replace function public.get_or_create_workspace()
+returns table(id uuid,name text,slug text,plan text,role text)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare ws public.workspaces%rowtype;
+begin
+  if auth.uid() is null then raise exception 'Authentication required'; end if;
+  select w.* into ws
+  from public.workspaces w
+  join public.workspace_members m on m.workspace_id=w.id
+  where m.user_id=auth.uid()
+  order by w.created_at
+  limit 1;
+
+  if ws.id is null then
+    ws.id := public.create_workspace('My Finance Workspace');
+    select * into ws from public.workspaces where workspaces.id=ws.id;
+  end if;
+
+  return query
+  select ws.id,ws.name,ws.slug,ws.plan,public.workspace_role(ws.id);
+end;
+$$;
+
+create or replace function public.seed_finpilot_workspace()
+returns void
+language plpgsql
+security invoker
+as $$
+declare ws_id uuid;
+begin
+  select id into ws_id from public.get_or_create_workspace() limit 1;
+  if not exists (select 1 from public.invoices where workspace_id = ws_id) then
+    insert into public.invoices (user_id,workspace_id,invoice_number,customer,amount,due,status,risk,po_amount,received_amount)
+    values
+      (auth.uid(),ws_id,'INV-1042','Acme Corp',480000,'2026-09-15','Overdue','High',480000,480000),
+      (auth.uid(),ws_id,'INV-1045','Northstar Labs',215000,'2026-09-25','Overdue','Medium',215000,205000),
+      (auth.uid(),ws_id,'INV-1051','Orbit Systems',98000,'2026-10-12','Pending','Low',98000,98000),
+      (auth.uid(),ws_id,'INV-1038','Vertex Health',620000,'2026-09-05','Overdue','High',600000,620000),
+      (auth.uid(),ws_id,'INV-1049','Brightline AI',126000,'2026-09-20','Paid','Low',126000,126000);
+  end if;
+
+  if not exists (select 1 from public.policies where workspace_id = ws_id) then
+    insert into public.policies (user_id,workspace_id,title,body,citation)
+    values
+      (auth.uid(),ws_id,'Collections Policy','Invoices become eligible for escalation after 14 days overdue.','§3.2'),
+      (auth.uid(),ws_id,'Invoice Approval Matrix','Invoices above ₹5L require finance lead approval.','§2.1'),
+      (auth.uid(),ws_id,'Vendor Payment SOP','Three-way matching must pass before payment approval.','§4.4');
+  end if;
+end;
+$$;
