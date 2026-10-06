@@ -63,3 +63,8 @@ The app now supports a real authenticated Supabase workspace. The UI falls back 
 The Supabase integration persists invoices, policies, workflow runs and uploaded documents. Storage uses a private `documents` bucket with per-user RLS policies.
 
 The publishable key is safe for browser use; never put a Supabase `service_role` key in frontend code or Vite environment variables.
+
+
+### Optional AI activation
+
+The repo includes a Supabase Edge Function at `supabase/functions/agent/index.ts`. Without an OpenAI secret, the assistant uses a deterministic grounded fallback. To enable natural-language reasoning, deploy the function with the Supabase CLI and set `OPENAI_API_KEY` as a server-side secret; never put that key in the frontend.
