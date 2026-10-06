@@ -44,6 +44,9 @@ function App(){
   const [authError,setAuthError] = useState("");
   const [policyData,setPolicyData] = useState(defaultPolicies);
   const [cloudReady,setCloudReady] = useState(false);
+  const [assistantQuestion,setAssistantQuestion] = useState("Why is INV-1042 high risk?");
+  const [assistantAnswer,setAssistantAnswer] = useState("INV-1042 is high risk because it is overdue and has ₹4.8L outstanding. The Collections Policy allows escalation after 14 days overdue.");
+  const [assistantBusy,setAssistantBusy] = useState(false);
   const [invoices,setInvoices] = useState<Invoice[]>(seed);
   const [query,setQuery] = useState("");
   const [selected,setSelected] = useState<Invoice|null>(null);
@@ -100,6 +103,16 @@ function App(){
     setAuthBusy(false);
     if(result.error){ setAuthError(result.error.message); return; }
     if(authMode==="signup" && !result.data.session) setAuthError("Account created. Check your email if confirmation is enabled, then sign in.");
+  }
+
+  async function askAssistant(){
+    if(!supabase || !user){ setAssistantAnswer("Connect to the Supabase workspace to use the grounded assistant."); return; }
+    setAssistantBusy(true);
+    const context={invoices,policies:policyData};
+    const result=await supabase.functions.invoke("agent",{body:{question:assistantQuestion,context}});
+    setAssistantBusy(false);
+    if(result.error){setAssistantAnswer("Assistant error: "+result.error.message);return;}
+    setAssistantAnswer(result.data?.answer || "No answer returned.");
   }
 
   async function signOut(){
@@ -186,7 +199,7 @@ function App(){
       {section==="Knowledge" && <Section title="Knowledge base" eyebrow="RAG + citations">
         <div className="knowledgeSearch"><Search size={16}/><input value={policyQuery} onChange={function(e){setPolicyQuery(e.target.value)}} placeholder="Search collections, approvals, payments…"/></div>
         <div className="knowledge">{policyResults.map(function(p){return <div className="doc" key={p[0]}><FileText size={20}/><div><b>{p[0]}</b><span>{p[1]}</span><small>Source · {p[0]} {p[2]}</small></div><span className="tag">indexed</span></div>})}{!policyResults.length&&<Empty title="No policy matches" text="Try approval, collections, or payment."/>}</div>
-        <div className="card askCard"><div className="cardHead"><div><span className="eyebrow">Grounded answer</span><h2>Why is INV-1042 high risk?</h2></div><ShieldCheck size={18}/></div><div className="bubble bot">INV-1042 is high risk because it is overdue and has ₹4.8L outstanding. The Collections Policy allows escalation after 14 days overdue.<small>Sources · Collections Policy §3.2 · Invoice record INV-1042</small></div></div>
+        <div className="card askCard"><div className="cardHead"><div><span className="eyebrow">Grounded answer</span><h2>Finance policy assistant</h2></div><ShieldCheck size={18}/></div><div className="assistantAsk"><input value={assistantQuestion} onChange={function(e){setAssistantQuestion(e.target.value)}} onKeyDown={function(e){if(e.key==="Enter")askAssistant()}}/><button className="primary" onClick={askAssistant} disabled={assistantBusy}>{assistantBusy?"Thinking…":"Ask"}</button></div><div className="bubble bot">{assistantAnswer}<small>Grounded against your Supabase invoice + policy records.</small></div></div>
       </Section>}
 
       {section==="Evaluations" && <Evaluations/>}
