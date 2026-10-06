@@ -39,7 +39,7 @@ function App(){
   const [query,setQuery] = useState("");
   const [selected,setSelected] = useState<Invoice|null>(null);
   const [running,setRunning] = useState(false);
-  const [trace,setTrace] = useState<Trace[]>(agentDefs.map(function(a){return {name:a[0],detail:a[1],state:"queued"}}));
+  const [trace,setTrace] = useState<Trace[]>(agentDefs.map(function(a){return {name:a[0],detail:a[1],state:"queued" as const}}));
   const [toast,setToast] = useState("");
   const [mail,setMail] = useState(false);
   const [policyQuery,setPolicyQuery] = useState("");
@@ -55,11 +55,11 @@ function App(){
   async function runWorkflow(){
     if(running) return;
     setRunning(true);
-    setTrace(agentDefs.map(function(a){return {name:a[0],detail:a[1],state:"queued"}}));
+    setTrace(agentDefs.map(function(a){return {name:a[0],detail:a[1],state:"queued" as const}}));
     for(let i=0;i<agentDefs.length;i++){
-      setTrace(function(prev){return prev.map(function(t,j){return j===i?{...t,state:"running"}:t})});
+      setTrace(function(prev){return prev.map(function(t,j){return j===i?{...t,state:"running" as const}:t})});
       await new Promise(function(r){window.setTimeout(r,420)});
-      setTrace(function(prev){return prev.map(function(t,j){return j===i?{...t,state:"done",ms:220+i*170}:t})});
+      setTrace(function(prev){return prev.map(function(t,j){return j===i?{...t,state:"done" as const,ms:220+i*170}:t})});
     }
     setRunning(false);
     notify("Workflow complete — 3 invoices require immediate attention.");
